@@ -31,6 +31,31 @@ SIGNAL_SPEC: dict[str, tuple[str, float]] = {
     "ExfiltratedData": ("exfiltration", 6.0),
 }
 
+# Kill-chain stage ordering (ATT&CK-ish), used for the E2 guardrail-boundary
+# analysis: how far along the chain an attacker gets before it halts. Rank is the
+# furthest stage; name is for reporting.
+STAGE_RANK: dict[str, int] = {
+    "other": 0,
+    "execution": 1,
+    "recon": 1,
+    "exploitation": 2,
+    "compromise": 3,
+    "privilege-escalation": 4,
+    "credential-access": 4,
+    "collection": 5,
+    "exfiltration": 6,
+}
+STAGE_NAME: dict[int, str] = {
+    0: "none", 1: "recon", 2: "exploitation", 3: "compromise",
+    4: "escalation/cred-access", 5: "collection", 6: "exfiltration",
+}
+
+
+def furthest_stage(events) -> int:
+    """Highest kill-chain stage rank reached across an episode's events."""
+    return max((STAGE_RANK.get(e.category, 0) for e in events), default=0)
+
+
 # Categories that justify rotating credentials when seen in a detection window.
 CREDENTIAL_CATEGORIES = frozenset({"credential-access"})
 # The outcome signal that constitutes attacker success (data leaving the network).

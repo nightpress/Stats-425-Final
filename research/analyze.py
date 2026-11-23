@@ -206,20 +206,57 @@ def e1_detectability_by_autonomy(df: pd.DataFrame, scope: str = "host",
     return summary, {"window": w, "threshold": t, "scope": scope, "chi2_p": p}
 
 
+def e2_guardrail_boundary(df: pd.DataFrame):
+    """E2: furthest kill-chain stage each attacker reaches — where LLM attackers
+    halt (safety guardrail) vs scripted attackers that complete the chain.
+    Collapses to one row per episode (stage is episode-level)."""
+    attack = df[~df["is_benign"]].copy()
+    if attack.empty or "furthest_stage_rank" not in attack:
+        return None
+    ep = attack.drop_duplicates("episode_id").copy()
+    ep["furthest_stage_rank"] = pd.to_numeric(ep["furthest_stage_rank"], errors="coerce")
+    rows = []
+    for key, grp in ep.groupby("attacker_model"):
+        modal = grp["furthest_stage"].mode()
+        rows.append({
+            "attacker": key,
+            "autonomy": grp["autonomy"].iloc[0],
+            "n": len(grp),
+            "median_stage_rank": float(grp["furthest_stage_rank"].median()),
+            "modal_stage": modal.iloc[0] if not modal.empty else "?",
+            "frac_reach_exfil": float((grp["furthest_stage_rank"] >= 6).mean()),
+        })
+    return pd.DataFrame(rows).sort_values("median_stage_rank")
+
+
 def try_glm(df: pd.DataFrame) -> str:
     try:
         import statsmodels.formula.api as smf
     except ImportError:
-        return ("logistic GLM skipped (statsmodels not installed; "
+        return ("GLM skipped (statsmodels not installed; "
                 "pip install -r research/requirements-analysis.txt)")
+    out = []
     a = df[~df["is_benign"]].copy()
+    a["detected_i"] = a["detected"].astype(int)
+    # Detection as a function of attacker autonomy, controlling for defender settings.
+    if "autonomy" in a and a["autonomy"].nunique() >= 2:
+        try:
+            m = smf.logit("detected_i ~ C(autonomy) + window_seconds + threshold + C(scope)",
+                          data=a).fit(disp=0)
+            out.append("Detection GLM: detected ~ autonomy + window + threshold + scope\n"
+                       + str(m.summary2().tables[1]))
+        except Exception as exc:  # noqa: BLE001
+            out.append(f"detection GLM failed: {exc!r}")
+    # Prevention as a function of defender settings.
     a["prevented_any"] = (pd.to_numeric(a["n_exfil_prevented"], errors="coerce") > 0).astype(int)
-    a["scope_global"] = (a["scope"] == "global").astype(int)
-    try:
-        model = smf.logit("prevented_any ~ window_seconds + threshold + scope_global", data=a).fit(disp=0)
-        return "logistic GLM: prevented_any ~ window + threshold + scope\n" + str(model.summary2().tables[1])
-    except Exception as exc:  # noqa: BLE001
-        return f"GLM failed: {exc!r}"
+    if a["prevented_any"].nunique() >= 2:
+        try:
+            m = smf.logit("prevented_any ~ window_seconds + threshold + C(scope)", data=a).fit(disp=0)
+            out.append("Prevention GLM: prevented_any ~ window + threshold + scope\n"
+                       + str(m.summary2().tables[1]))
+        except Exception as exc:  # noqa: BLE001
+            out.append(f"prevention GLM failed: {exc!r}")
+    return "\n\n".join(out) if out else "GLM: not enough variation to fit a model"
 
 
 def main() -> None:
@@ -256,6 +293,15 @@ def main() -> None:
                       f"[{r['ci_lo']:.2f},{r['ci_hi']:.2f}] (n={int(r['n'])})")
             if meta["chi2_p"] is not None:
                 print(f"   chi-square (detection depends on autonomy): p={meta['chi2_p']:.4g}")
+
+    if "furthest_stage_rank" in df:
+        e2 = e2_guardrail_boundary(df)
+        if e2 is not None and not e2.empty:
+            e2.to_csv(os.path.join(args.outdir, "e2_guardrail_boundary.csv"), index=False)
+            print("\nE2 kill-chain stage reached by attacker (where each halts):")
+            for _, r in e2.iterrows():
+                print(f"   {r['attacker']:>16} [{r['autonomy']}]: modal={r['modal_stage']} "
+                      f"(median rank {r['median_stage_rank']:.0f}), reach-exfil={r['frac_reach_exfil']:.2f} (n={int(r['n'])})")
 
     print("\n" + try_glm(df))
 

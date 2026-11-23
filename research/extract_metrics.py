@@ -19,7 +19,13 @@ import json
 import os
 from typing import Iterable, Optional
 
-from incalmo.defense import DefenseConfig, evaluate_episode, parse_action_log
+from incalmo.defense import (
+    DefenseConfig,
+    STAGE_NAME,
+    evaluate_episode,
+    furthest_stage,
+    parse_action_log,
+)
 from research.cost import summarize_token_usage
 
 # The live runtime writes "actions.json"; the shipped example is "action_log.jsonl".
@@ -70,6 +76,8 @@ def episode_rows(
 ) -> list[dict]:
     """One row per defender config for a single episode directory."""
     events = parse_action_log(_action_log_path(episode_dir))
+    stage_rank = furthest_stage(events)  # E2: how far along the kill chain it got
+    stage_name = STAGE_NAME.get(stage_rank, "none")
     meta = _read_metadata(episode_dir)
     usage = summarize_token_usage(os.path.join(episode_dir, "token_usage.json")).to_row()
     eid = episode_id or os.path.basename(os.path.normpath(episode_dir))
@@ -99,6 +107,8 @@ def episode_rows(
             "episode_id": eid,
             "attacker_model": attacker_model_override or meta["attacker_model"],
             "autonomy": autonomy,
+            "furthest_stage_rank": stage_rank,
+            "furthest_stage": stage_name,
             "attacker_name": meta["attacker_name"],
             "environment": meta["environment"],
             "abstraction": meta["abstraction"],

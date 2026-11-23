@@ -20,7 +20,13 @@ future work.
 """
 
 from incalmo.defense.config import DefenseConfig
-from incalmo.defense.telemetry import SecurityEvent, parse_action_log, SIGNAL_SPEC
+from incalmo.defense.telemetry import (
+    SecurityEvent,
+    parse_action_log,
+    SIGNAL_SPEC,
+    STAGE_NAME,
+    furthest_stage,
+)
 from incalmo.defense.orchestrator import (
     DefenseOrchestrator,
     AuditEntry,
@@ -34,6 +40,8 @@ __all__ = [
     "SecurityEvent",
     "parse_action_log",
     "SIGNAL_SPEC",
+    "STAGE_NAME",
+    "furthest_stage",
     "DefenseOrchestrator",
     "AuditEntry",
     "Detection",
