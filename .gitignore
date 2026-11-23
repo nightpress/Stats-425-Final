@@ -179,3 +179,12 @@ incalmo/c2server/payloads/dynamic_payload_*.sh
 
 # SQLite database files
 *.db
+# research artifacts (generated datasets, figures, episode libraries)
+research/out/
+
+# cloned upstream (sandcat build) — do not track
+caldera/
+# Caldera sandcat implant binary (environment-specific, built locally)
+incalmo/c2server/agents/sandcat.go
+# secrets — never track
+.env

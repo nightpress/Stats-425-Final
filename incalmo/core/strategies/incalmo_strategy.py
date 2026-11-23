@@ -1,3 +1,4 @@
+import asyncio
 from incalmo.core.services import (
     EnvironmentStateService,
     AttackGraphService,
@@ -69,7 +70,16 @@ class IncalmoStrategy(ABC):
         c2_client.report_environment_state(env_service.network)
 
     async def initialize(self, task_id: str = ""):
+        # The C2 agent store is reset at process start (StateStore.initialize in
+        # main.py); the live foothold agent re-registers on its next beacon (a
+        # few seconds later). Poll briefly for it rather than losing that race
+        # and failing the whole episode.
         agents = self.c2_client.get_agents()
+        waited = 0.0
+        while len(agents) == 0 and waited < 40.0:
+            await asyncio.sleep(2.0)
+            waited += 2.0
+            agents = self.c2_client.get_agents()
         if len(agents) == 0:
             raise Exception("No trusted agents found")
         self.environment_state_service.update_host_agents(agents)

@@ -1,0 +1,11 @@
+# amd64 override for running the range on an arm64 host (Apple Silicon) under
+# emulation, so an amd64-built sandcat implant matches the container arch.
+# Use with:  docker compose -f docker/docker-compose.yml -f docker/docker-compose.amd64.yml up -d --build
+# On a native amd64 host (e.g. a RunPod CPU pod) this is a no-op and runs natively.
+services:
+  attacker:
+    platform: linux/amd64
+  webserver:
+    platform: linux/amd64
+  db:
+    platform: linux/amd64

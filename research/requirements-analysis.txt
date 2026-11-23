@@ -1,0 +1,10 @@
+# Analysis-only dependencies (NOT needed to run the defender or the sweep).
+# The defense package and extractor are pure stdlib; analyze.py needs these.
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7
+scipy>=1.10
+# Optional: enables the logistic GLM in analyze.py (hand-rolled KM/log-rank work without it).
+statsmodels>=0.14
+# Optional alternative survival toolkit if you prefer it over the built-in KM:
+# lifelines>=0.27
