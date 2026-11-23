@@ -28,8 +28,11 @@ def _line(ts: datetime, type_: str, action_name: str, results: dict | None = Non
     return json.dumps(rec)
 
 
-def _attack_episode(rng: random.Random, n_hosts: int) -> tuple[list[str], int]:
-    """Return (jsonl lines, n_exfil) for one synthetic attacker episode."""
+def _attack_episode(rng: random.Random, n_hosts: int, include_exfil: bool = True) -> tuple[list[str], int]:
+    """Return (jsonl lines, n_exfil) for one synthetic attacker episode.
+
+    include_exfil=False truncates at credential-access (mimicking a safety-bounded
+    LLM attacker), which is both quieter and never reaches exfiltration."""
     t = datetime(2025, 1, 1, 12, 0, 0)
     lines: list[str] = []
     step = lambda lo, hi: timedelta(seconds=rng.uniform(lo, hi))
@@ -56,13 +59,14 @@ def _attack_episode(rng: random.Random, n_hosts: int) -> tuple[list[str], int]:
             lines.append(_line(t, "LowLevelAction", "ls",
                                {"FilesFound": {"agent": {"host": host}}}))
         # exfil, preceded by the high-level action that names the target host
-        for _ in range(rng.randint(1, 4)):
-            t += step(3, 30)
-            lines.append(_line(t, "HighLevelAction", "ExfiltrateData",
-                               params={"target_host": host}))
-            lines.append(_line(t, "LowLevelAction", "exfil",
-                               {"ExfiltratedData": {"file": f"data_{host}_{n_exfil}.json"}}))
-            n_exfil += 1
+        if include_exfil:
+            for _ in range(rng.randint(1, 4)):
+                t += step(3, 30)
+                lines.append(_line(t, "HighLevelAction", "ExfiltrateData",
+                                   params={"target_host": host}))
+                lines.append(_line(t, "LowLevelAction", "exfil",
+                                   {"ExfiltratedData": {"file": f"data_{host}_{n_exfil}.json"}}))
+                n_exfil += 1
     return lines, n_exfil
 
 
@@ -97,30 +101,39 @@ def _write_episode(path: str, lines: list[str], attacker_model: str, env: str,
         json.dump(results, fh)
 
 
-def make_library(out_dir: str, n_attack: int = 24, n_benign: int = 12, seed: int = 0) -> str:
+def make_library(out_dir: str, n_scripted: int = 12, n_llm: int = 12,
+                 n_benign: int = 12, seed: int = 0) -> str:
+    """Emit an autonomy-labeled synthetic library for validating the pipeline:
+    scripted (loud, full kill chain incl. exfil) vs llm (truncated at
+    credential-access, quieter) vs benign. Labels/schemas match the extractor;
+    this is a FIXTURE, not a result."""
     rng = random.Random(seed)
     os.makedirs(out_dir, exist_ok=True)
-    for i in range(n_attack):
-        model = "claude-haiku-5-5" if i % 4 else "claude-sonnet-5-5"
-        lines, n_exfil = _attack_episode(rng, n_hosts=rng.randint(3, 7))
-        _write_episode(os.path.join(out_dir, f"attack_{model}_{i:03d}"), lines,
-                       model, "equifax_large", n_exfil, benign=False)
+    for i in range(n_scripted):  # loud, many hosts, exfiltrates -> easily detected
+        lines, n_exfil = _attack_episode(rng, n_hosts=rng.randint(4, 7), include_exfil=True)
+        _write_episode(os.path.join(out_dir, f"scripted-bfs__equifax_large__rep{i:03d}"),
+                       lines, "scripted-bfs", "equifax_large", n_exfil, benign=False)
+    for i in range(n_llm):  # truncated at cred-access (safety-bounded), quieter
+        lines, n_exfil = _attack_episode(rng, n_hosts=rng.randint(1, 2), include_exfil=False)
+        _write_episode(os.path.join(out_dir, f"llm-haiku__equifax_large__rep{i:03d}"),
+                       lines, "llm-haiku", "equifax_large", n_exfil, benign=False)
     for i in range(n_benign):
         lines = _benign_episode(rng)
-        _write_episode(os.path.join(out_dir, f"benign_{i:03d}"), lines,
-                       "claude-haiku-5-5", "equifax_large", 0, benign=True)
-    print(f"synthesized {n_attack} attack + {n_benign} benign episodes -> {out_dir}")
+        _write_episode(os.path.join(out_dir, f"benign__equifax_large__rep{i:03d}"),
+                       lines, "benign", "equifax_large", 0, benign=True)
+    print(f"synthesized {n_scripted} scripted + {n_llm} llm + {n_benign} benign -> {out_dir}")
     return out_dir
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("out_dir")
-    p.add_argument("--attack", type=int, default=24)
+    p.add_argument("--scripted", type=int, default=12)
+    p.add_argument("--llm", type=int, default=12)
     p.add_argument("--benign", type=int, default=12)
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
-    make_library(args.out_dir, args.attack, args.benign, args.seed)
+    make_library(args.out_dir, args.scripted, args.llm, args.benign, args.seed)
 
 
 if __name__ == "__main__":

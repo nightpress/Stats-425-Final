@@ -175,6 +175,37 @@ def plot_km_time_to_contain(df: pd.DataFrame, out_path: str) -> str:
     return "need both scopes for a log-rank test"
 
 
+def e1_detectability_by_autonomy(df: pd.DataFrame, scope: str = "host",
+                                 window=None, threshold=None):
+    """E1: at a fixed operating point, does detection rate differ by attacker
+    autonomy class (scripted vs llm)? Returns a per-class table (rate + bootstrap
+    95% CI) and a chi-square p-value for detection-depends-on-autonomy."""
+    from scipy.stats import chi2_contingency
+    attack = df[~df["is_benign"]].copy()
+    if attack.empty or "autonomy" not in attack:
+        return None, None
+    w = window if window is not None else float(attack["window_seconds"].median())
+    t = threshold if threshold is not None else float(attack["threshold"].median())
+    cell = attack[(attack["window_seconds"] == w) & (attack["threshold"] == t)
+                  & (attack["scope"] == scope)]
+    rows, contingency = [], []
+    for aut, grp in cell.groupby("autonomy"):
+        det = grp["detected"].astype(float).values
+        m, lo, hi = _bootstrap_ci(det)
+        rows.append({"autonomy": aut, "n": len(grp), "detection_rate": m,
+                     "ci_lo": lo, "ci_hi": hi})
+        pos = int(grp["detected"].astype(bool).sum())
+        contingency.append([pos, len(grp) - pos])
+    summary = pd.DataFrame(rows)
+    p = None
+    if len(contingency) >= 2 and all(sum(r) > 0 for r in contingency):
+        try:
+            p = float(chi2_contingency(contingency)[1])
+        except Exception:  # noqa: BLE001
+            p = None
+    return summary, {"window": w, "threshold": t, "scope": scope, "chi2_p": p}
+
+
 def try_glm(df: pd.DataFrame) -> str:
     try:
         import statsmodels.formula.api as smf
@@ -213,6 +244,19 @@ def main() -> None:
     plot_operating_curve(summary, oc); print(f"wrote {oc}")
     km = os.path.join(figdir, "km_time_to_contain.png")
     print(plot_km_time_to_contain(df, km)); print(f"wrote {km}")
+
+    if "autonomy" in df:
+        e1, meta = e1_detectability_by_autonomy(df)
+        if e1 is not None and not e1.empty:
+            e1.to_csv(os.path.join(args.outdir, "e1_detectability_by_autonomy.csv"), index=False)
+            print(f"\nE1 detectability by autonomy "
+                  f"(scope={meta['scope']}, window={meta['window']:g}s, threshold={meta['threshold']:g}):")
+            for _, r in e1.iterrows():
+                print(f"   {r['autonomy']:>8}: detect={r['detection_rate']:.2f} "
+                      f"[{r['ci_lo']:.2f},{r['ci_hi']:.2f}] (n={int(r['n'])})")
+            if meta["chi2_p"] is not None:
+                print(f"   chi-square (detection depends on autonomy): p={meta['chi2_p']:.4g}")
+
     print("\n" + try_glm(df))
 
 

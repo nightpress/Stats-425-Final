@@ -76,12 +76,21 @@ def episode_rows(
     benign = bool(is_benign) if is_benign is not None else eid.startswith("benign")
 
     # The live runtime doesn't write results.json on an early stop; recover the
-    # attacker model and environment from the episode id (<model>__<env>__repNN).
+    # attacker model and environment from the episode id (<key>__<env>__repNN).
     if not meta["attacker_model"] or not meta["environment"]:
         parts = eid.split("__")
         if len(parts) >= 2:
             meta["attacker_model"] = meta["attacker_model"] or parts[0]
             meta["environment"] = meta["environment"] or parts[1]
+
+    # Autonomy class — the E1 axis. scripted-* = deterministic full-chain; benign
+    # = the FPR control; everything else = an LLM-driven attacker.
+    if benign:
+        autonomy = "benign"
+    elif eid.startswith("scripted-") or (meta["attacker_model"] or "").startswith("scripted-"):
+        autonomy = "scripted"
+    else:
+        autonomy = "llm"
 
     rows: list[dict] = []
     for cfg in defender_configs:
@@ -89,6 +98,7 @@ def episode_rows(
         row = {
             "episode_id": eid,
             "attacker_model": attacker_model_override or meta["attacker_model"],
+            "autonomy": autonomy,
             "attacker_name": meta["attacker_name"],
             "environment": meta["environment"],
             "abstraction": meta["abstraction"],
