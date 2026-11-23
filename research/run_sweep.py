@@ -66,12 +66,12 @@ def _write_config(cell: dict) -> None:
         json.dump(base, fh, indent=2)
 
 
-def _write_benign_config(environment: str, name: str) -> None:
-    """Point config/config.json at the BenignAdmin state-machine strategy (no LLM)."""
+def _write_strategy_config(environment: str, name: str, strategy_name: str) -> None:
+    """Point config/config.json at a state-machine strategy by name (no LLM)."""
     with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
         base = json.load(fh)
     base["name"] = name
-    base["strategy"] = {"name": "BenignAdmin"}
+    base["strategy"] = {"name": strategy_name}
     base["environment"] = environment
     if os.environ.get("C2C_SERVER"):
         base["c2c_server"] = os.environ["C2C_SERVER"]
@@ -205,7 +205,7 @@ def cmd_benign_real(args: argparse.Namespace) -> None:
                 print(f"[skip] {eid} (already present)")
                 continue
             print(f"[run ] {eid}  (benign, $0)")
-            _write_benign_config(args.environment, f"benign_{rep}")
+            _write_strategy_config(args.environment, f"benign_{rep}", "BenignAdmin")
             env = dict(os.environ, INCALMO_OUTPUT_DIR=episode_dir,
                        INCALMO_BENIGN_ROUNDS=str(args.rounds))
             try:
@@ -217,6 +217,37 @@ def cmd_benign_real(args: argparse.Namespace) -> None:
     finally:
         shutil.move(config_backup, CONFIG_PATH)
     print(f"\nDone. Ran {ran} real benign episodes (no API cost).")
+
+
+def cmd_scripted(args: argparse.Namespace) -> None:
+    """Run N episodes of a named scripted (non-LLM) attacker on the live range.
+
+    Deterministic, $0 (no LLM, no safety guardrail), and completes the full kill
+    chain including exfiltration — the completed-attack telemetry the LLM
+    attackers can't provide. Needs the range up with a foothold.
+    """
+    os.makedirs(args.library, exist_ok=True)
+    config_backup = CONFIG_PATH + ".sweepbak"
+    shutil.copyfile(CONFIG_PATH, config_backup)
+    ran = 0
+    try:
+        for rep in range(args.n):
+            eid = f"scripted-{args.key}__{args.environment}__rep{rep:03d}"
+            episode_dir = os.path.join(args.library, eid)
+            if _is_done(episode_dir):
+                print(f"[skip] {eid} (already present)")
+                continue
+            print(f"[run ] {eid}  (scripted {args.strategy}, $0)")
+            _write_strategy_config(args.environment, f"scripted_{args.key}_{rep}", args.strategy)
+            try:
+                subprocess.run([sys.executable, "main.py"], cwd=REPO_ROOT,
+                               env=dict(os.environ), timeout=args.timeout, check=False)
+            except subprocess.TimeoutExpired:
+                print(f"[warn] {eid} timed out after {args.timeout}s")
+            ran += 1
+    finally:
+        shutil.move(config_backup, CONFIG_PATH)
+    print(f"\nDone. Ran {ran} scripted {args.strategy} episodes (no API cost).")
 
 
 def cmd_extract(args: argparse.Namespace) -> None:
@@ -259,6 +290,15 @@ def main() -> None:
     sbr.add_argument("--environment", default="equifax_large")
     sbr.add_argument("--timeout", type=int, default=600, help="per-episode timeout (s)")
     sbr.set_defaults(func=cmd_benign_real)
+
+    ss = sub.add_parser("scripted", help="run a scripted (non-LLM) full-chain attacker on the range ($0)")
+    ss.add_argument("--library", required=True)
+    ss.add_argument("--strategy", required=True, help="registered state-machine strategy, e.g. NetworkBFS")
+    ss.add_argument("--key", required=True, help="short label for the episode id, e.g. bfs")
+    ss.add_argument("--n", type=int, default=10)
+    ss.add_argument("--environment", default="equifax_large")
+    ss.add_argument("--timeout", type=int, default=900)
+    ss.set_defaults(func=cmd_scripted)
 
     se = sub.add_parser("extract", help="score library -> rows.csv")
     se.add_argument("--library", required=True)

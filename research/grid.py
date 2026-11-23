@@ -29,6 +29,32 @@ REPLICATES: int = 20
 # Benign runs (no attacker) give the false-positive rate ~for free.
 BENIGN_REPLICATES: int = 10
 
+# ---- Phase 2: the attacker spectrum (the E1 "detectability vs autonomy" axis) --
+# Scripted, deterministic, NON-LLM attackers. They complete the full kill chain
+# incl. exfiltration at $0 and hit no safety guardrail (no model to refuse), so
+# they supply the completed-attack telemetry the LLM attackers can't. "topo":
+# "any" = topology-agnostic graph search; "equifax" = equifax-specific script.
+# (Which run on which topology is CONFIRMED on the range before the scale run.)
+SCRIPTED_ATTACKERS: list[dict] = [
+    {"key": "bfs", "strategy": "NetworkBFS", "autonomy": "scripted", "topo": "any"},
+    {"key": "dfs", "strategy": "NetworkDFS", "autonomy": "scripted", "topo": "any"},
+    {"key": "mulval", "strategy": "MulvalOptimal", "autonomy": "scripted", "topo": "any"},
+    {"key": "equifax", "strategy": "EquifaxStrategy", "autonomy": "scripted", "topo": "equifax"},
+]
+# LLM attackers along the autonomy/capability axis (high abstraction = Incalmo).
+# These are safety-bounded (a measured result, E2), run via the `generate` path.
+LLM_ATTACKERS: list[dict] = [
+    {"key": "haiku", "llm": "claude-haiku-5-5", "abstraction": "incalmo", "autonomy": "llm"},
+    {"key": "sonnet", "llm": "claude-sonnet-5-5", "abstraction": "incalmo", "autonomy": "llm"},
+    {"key": "opus", "llm": "claude-opus-5-5", "abstraction": "incalmo", "autonomy": "llm"},
+]
+
+
+def scripted_for_env(environment: str) -> list[dict]:
+    """Scripted attackers compatible with a topology (topo-agnostic + matching)."""
+    fam = environment.split("_")[0]
+    return [a for a in SCRIPTED_ATTACKERS if a["topo"] == "any" or a["topo"] == fam]
+
 # ---- defender-sweep axes (free: replayed offline) ---------------------------
 
 WINDOW_SECONDS: list[float] = [30, 60, 120, 240, 480]
