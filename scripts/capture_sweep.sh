@@ -50,6 +50,7 @@ run_one() {  # $1=label $2=type $3=rep
   echo "[run ] $eid ($2)"
   bash scripts/capture_episode.sh "$EP" timeout "$PER_EP_TIMEOUT" \
     $COMPOSE exec -T -e C2C_SERVER_AGENTS="$C2" -e "INCALMO_OUTPUT_DIR=/incalmo/$EP" \
+    -e ATTACK_FRAMING="${ATTACK_FRAMING:-baseline}" \
     attacker bash -lc "cd /incalmo && uv run python main.py" \
     > "$EP.caplog" 2>&1 || echo "[warn] $eid capture returned non-zero"
   echo "       exfil=$(grep -o ExfiltratedData "$EP/actions.json" 2>/dev/null | wc -l) \

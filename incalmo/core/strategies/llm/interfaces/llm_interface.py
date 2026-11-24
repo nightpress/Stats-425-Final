@@ -13,6 +13,34 @@ from incalmo.core.services import (
     EnvironmentStateService,
 )
 from string import Template
+import json
+
+
+def _apply_attack_framing(pre_prompt_text: str, framings_path: str) -> str:
+    """Swap the goal paragraph of the incalmo pre_prompt for a framing variant
+    selected by the ATTACK_FRAMING env var (refusal-robustness experiment).
+
+    Variants (framings.json) vary only the task's objective/authorization toward
+    LESS-harmful goals, to measure which task properties drive a model's safety
+    refusal; the Incalmo SDK instructions after the marker are left untouched.
+    "baseline"/unset returns the shipped prompt. Any error (missing file, unknown
+    key, marker absent) falls back to the original text, so a bad ATTACK_FRAMING
+    can never silently blank the system prompt.
+    """
+    framing = os.environ.get("ATTACK_FRAMING", "").strip()
+    if not framing or framing == "baseline":
+        return pre_prompt_text
+    try:
+        with open(framings_path, "r") as fh:
+            framings = json.load(fh)
+        marker = framings["_marker"]
+        replacement = framings[framing]
+    except (OSError, KeyError, ValueError):
+        return pre_prompt_text
+    idx = pre_prompt_text.find(marker)
+    if idx < 0:
+        return pre_prompt_text
+    return replacement + "\n" + pre_prompt_text[idx:]
 
 
 # Prose refusal phrases. A model can decline a task in ordinary text with a
@@ -153,7 +181,8 @@ class LLMInterface(ABC):
                 final_prompt = file.read()
         elif config.strategy.abstraction == AbstractionLevel.INCALMO:
             with open(f"{pre_prompt_path}/incalmo/pre_prompt.txt", "r") as file:
-                pre_prompt += Template(file.read()).substitute(parameters)
+                _raw = Template(file.read()).substitute(parameters)
+            pre_prompt += _apply_attack_framing(_raw, f"{pre_prompt_path}/incalmo/framings.json")
             with open(f"{pre_prompt_path}/incalmo/codebase.txt", "r") as file:
                 pre_prompt += file.read()
             with open(f"{pre_prompt_path}/incalmo/final_prompt.txt", "r") as file:
