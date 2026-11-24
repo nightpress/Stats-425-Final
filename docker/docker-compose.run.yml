@@ -1,0 +1,12 @@
+# Run override for a native amd64 Docker host (cloud VM): plant the initial
+# foothold. start.sh only launches the attacker's own sandcat agent (the "kali"
+# foothold the Equifax scenario starts from) when MODE=docker; the base compose
+# sets MODE=remote, which leaves the attacker with no initial trusted agent
+# (strategy.initialize() then raises "No trusted agents found").
+#
+# Use on an amd64 host (no platform pin needed; the host is already amd64):
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.run.yml up -d --build
+services:
+  attacker:
+    environment:
+      - MODE=docker

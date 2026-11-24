@@ -248,6 +248,12 @@ _ANTHROPIC_DIRECT = {
     "claude-sonnet-5": ("claude-sonnet-5", _ANTHROPIC_C5),
     "claude-fable-5": ("claude-fable-5", _ANTHROPIC_C5),
     "claude-mythos-5": ("claude-mythos-5", _ANTHROPIC_C5),
+    # Current generation (5.5): sampling params are rejected -> send none. These
+    # are the cheapest capable attacker models for the defense study; haiku-5-5
+    # is the default bulk attacker (see research/grid.py).
+    "claude-haiku-5-5": ("claude-haiku-5-5", _ANTHROPIC_NO_SAMPLING),
+    "claude-sonnet-5-5": ("claude-sonnet-5-5", _ANTHROPIC_NO_SAMPLING),
+    "claude-opus-5-5": ("claude-opus-5-5", _ANTHROPIC_NO_SAMPLING),
 }
 
 # name -> upstream gemini model id
