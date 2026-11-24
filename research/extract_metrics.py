@@ -26,6 +26,7 @@ from incalmo.defense import (
     furthest_stage,
     parse_action_log,
 )
+from incalmo.defense.sensors import parse_sensors
 from research.cost import summarize_token_usage
 
 # The live runtime writes "actions.json"; the shipped example is "action_log.jsonl".
@@ -75,8 +76,13 @@ def episode_rows(
     attacker_model_override: Optional[str] = None,
 ) -> list[dict]:
     """One row per defender config for a single episode directory."""
-    events = parse_action_log(_action_log_path(episode_dir))
-    stage_rank = furthest_stage(events)  # E2: how far along the kill chain it got
+    # Attacker's own log = GROUND TRUTH (labels: exfil, kill-chain stage).
+    attacker_events = parse_action_log(_action_log_path(episode_dir))
+    # Defender input = INDEPENDENT sensors if captured, else the attacker log.
+    sensor_events = parse_sensors(episode_dir)
+    defender_events = sensor_events if sensor_events else attacker_events
+    defender_input = "sensors" if sensor_events else "action_log"
+    stage_rank = furthest_stage(attacker_events)  # E2: how far along the kill chain
     stage_name = STAGE_NAME.get(stage_rank, "none")
     meta = _read_metadata(episode_dir)
     usage = summarize_token_usage(os.path.join(episode_dir, "token_usage.json")).to_row()
@@ -102,11 +108,14 @@ def episode_rows(
 
     rows: list[dict] = []
     for cfg in defender_configs:
-        metrics = evaluate_episode(events, cfg, is_benign=benign)
+        metrics = evaluate_episode(defender_events, cfg, is_benign=benign,
+                                   ground_truth_events=attacker_events)
         row = {
             "episode_id": eid,
             "attacker_model": attacker_model_override or meta["attacker_model"],
             "autonomy": autonomy,
+            "defender_input": defender_input,
+            "n_sensor_events": len(sensor_events),
             "furthest_stage_rank": stage_rank,
             "furthest_stage": stage_name,
             "attacker_name": meta["attacker_name"],
