@@ -36,7 +36,7 @@ The defender + extractor are pure stdlib; only the analysis needs libs.
 ```bash
 git clone https://github.com/nightpress/Stats-425-Final.git
 cd Stats-425-Final
-git switch feat/defense-orchestrator-experiment      # all the work is on this branch
+git switch main                                       # all work is merged here
 pip install -r research/requirements-analysis.txt    # pandas/numpy/matplotlib/scipy (+statsmodels)
 
 # run the tests
@@ -107,12 +107,12 @@ Key facts worth knowing (also in `PAPER_PLAN.md` / git history):
 ## 5. Contribution workflow
 
 ```bash
-git switch feat/defense-orchestrator-experiment && git pull
+git switch main && git pull
 git switch -c <type>/<topic>                     # e.g. feat/closed-loop-defender
 # ... change code; keep changes small and tested ...
 PYTHONPATH=. python3 tests/test_defense.py       # must pass
 git commit -m "..."                              # end with the Co-Authored-By line if AI-assisted
-git push -u origin <type>/<topic>                # open a PR against the feature branch (or main)
+git push -u origin <type>/<topic>                # open a PR against main
 ```
 - Don't commit `.env`, `*.go` implant binaries, `caldera/`, or `research/out/`.
 - Prefer verifying on the synthetic fixture or the captured `caplib/` before
