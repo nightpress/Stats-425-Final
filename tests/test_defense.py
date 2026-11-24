@@ -110,6 +110,62 @@ def test_benign_detection_is_false_positive():
     assert m.detected and m.false_positive and m.n_false_positive_detections == m.n_detections
 
 
+def _brute_detections(events, cfg):
+    """Reference scorer: the naive full-window rescan the orchestrator used before
+    incremental scoring. Returns the detection decisions the fast path must match
+    (implicated host excluded - it differs only on exact weight ties, which don't
+    affect global-scope remediation)."""
+    from collections import deque
+    from incalmo.defense.remediation import NetworkState
+    window, last, out = deque(), {}, []
+    for ev in events:
+        window.append(ev)
+        cut = ev.t - cfg.window_seconds
+        while window and window[0].t < cut:
+            window.popleft()
+        sk = NetworkState.GLOBAL if cfg.scope == "global" else (ev.host or NetworkState.GLOBAL)
+        total, evi = 0.0, {}
+        for e in window:
+            if not (sk == NetworkState.GLOBAL or e.host == sk):
+                continue
+            total += cfg.weights.get(e.signal, e.weight)
+            evi[e.signal] = evi.get(e.signal, 0) + 1
+        if total < cfg.threshold:
+            continue
+        l = last.get(sk)
+        if l is not None and (cfg.cooldown_seconds <= 0 or (ev.t - l) < cfg.cooldown_seconds):
+            continue
+        last[sk] = ev.t
+        out.append((ev.t, sk, round(total, 6), tuple(sorted(evi.items()))))
+    return out
+
+
+def test_incremental_scoring_matches_naive_rescan():
+    # The O(1)-per-event incremental scoring must make the SAME detection
+    # decisions as a full-window rescan, on a long multi-host stream with
+    # eviction, per-signal weights, both scopes, and a cooldown.
+    import random
+    rng = random.Random(7)
+    hosts, signals = [None, "h1", "h2", "h3"], ["InfectedNewHost", "ExfiltratedData", "LateralMove", "Recon"]
+    base, t, events = datetime(2025, 1, 1), 0.0, []
+    for i in range(400):
+        t += rng.choice([0, 1, 3, 7, 20, 60])
+        events.append(SecurityEvent(index=i, timestamp=base + timedelta(seconds=t), t=float(t),
+                                    signal=rng.choice(signals), category="x",
+                                    weight=rng.choice([1.0, 2.0, 5.0]), host=rng.choice(hosts)))
+    for scope in ("global", "host"):
+        for window in (5, 60, 200):
+            for thr in (5.0, 15.0):
+                for cd in (0, 30):
+                    cfg = DefenseConfig(window_seconds=window, threshold=thr, scope=scope,
+                                        cooldown_seconds=cd, weights={"ExfiltratedData": 5.0, "LateralMove": 2.0})
+                    orch = DefenseOrchestrator(cfg)
+                    orch.run(events)
+                    got = [(d.time, d.scope_key, round(d.score, 6), tuple(sorted(d.evidence.items())))
+                           for d in orch.detections]
+                    assert got == _brute_detections(events, cfg), f"mismatch at scope={scope} w={window} thr={thr} cd={cd}"
+
+
 def test_networkstate_global_contains_all():
     ns = NetworkState()
     ns.isolate_host(None, 50.0)  # global containment

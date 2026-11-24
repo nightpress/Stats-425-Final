@@ -59,7 +59,16 @@ class DefenseOrchestrator:
         self.audit: list[AuditEntry] = []
         self.detections: list[Detection] = []
         self._window: deque[SecurityEvent] = deque()
+        self._wwin: deque[float] = deque()  # per-event weights, aligned with _window
         self._last_detection_time: dict[str, float] = {}
+        # Running window aggregates, kept in lockstep with _window by _add/_sub so
+        # scoring is O(1) per event. A full rescan per event (the earlier design)
+        # is O(N*W) and turns quadratic on long streams (~20k events/benign episode).
+        self._g_total: float = 0.0                   # weighted score over all window events
+        self._g_evi: dict[str, int] = {}             # signal -> count over all window events
+        self._h_total: dict[str, float] = {}         # host -> weighted score (host-scoped)
+        self._h_evi: dict[str, dict[str, int]] = {}  # host -> signal -> count
+        self._h_count: dict[str, int] = {}           # host -> # window events (drives eviction)
 
     # -- public API ---------------------------------------------------------
 
@@ -71,17 +80,22 @@ class DefenseOrchestrator:
 
     def process_event(self, event: SecurityEvent) -> Optional[Detection]:
         """Ingest one event, updating the window and possibly firing a detection."""
+        w = self.config.weights.get(event.signal, event.weight)
         self._window.append(event)
+        self._wwin.append(w)
+        self._add(event, w)
         self._evict(event.t)
 
         scope_key = self._scope_key_for(event)
-        score, evidence, implicated = self._score(scope_key)
+        score = self._scope_total(scope_key)
 
         if score < self.config.threshold:
             return None
         if not self._armed(scope_key, event.t):
             return None
 
+        # Build the evidence snapshot + implicated host only now that we are firing.
+        evidence, implicated = self._scope_detail(scope_key)
         containment_time = event.t + self.config.remediation_latency_seconds
         detection = Detection(
             time=event.t,
@@ -101,42 +115,70 @@ class DefenseOrchestrator:
     def _evict(self, now: float) -> None:
         cutoff = now - self.config.window_seconds
         while self._window and self._window[0].t < cutoff:
-            self._window.popleft()
+            ev = self._window.popleft()
+            self._sub(ev, self._wwin.popleft())
+
+    def _add(self, ev: SecurityEvent, w: float) -> None:
+        """Fold one event INTO the running window aggregates."""
+        self._g_total += w
+        self._g_evi[ev.signal] = self._g_evi.get(ev.signal, 0) + 1
+        if ev.host is not None:
+            h = ev.host
+            self._h_total[h] = self._h_total.get(h, 0.0) + w
+            evi = self._h_evi.setdefault(h, {})
+            evi[ev.signal] = evi.get(ev.signal, 0) + 1
+            self._h_count[h] = self._h_count.get(h, 0) + 1
+
+    def _sub(self, ev: SecurityEvent, w: float) -> None:
+        """Remove one evicted event FROM the running window aggregates."""
+        self._g_total -= w
+        self._dec(self._g_evi, ev.signal)
+        if ev.host is not None:
+            h = ev.host
+            self._h_total[h] -= w
+            self._dec(self._h_evi[h], ev.signal)
+            self._h_count[h] -= 1
+            if self._h_count[h] <= 0:  # host has no events left in the window
+                del self._h_count[h]
+                del self._h_total[h]
+                del self._h_evi[h]
+
+    @staticmethod
+    def _dec(counts: dict[str, int], key: str) -> None:
+        """Decrement a count, dropping the key at zero so a snapshot lists only
+        signals actually present in the window."""
+        c = counts.get(key, 0) - 1
+        if c <= 0:
+            counts.pop(key, None)
+        else:
+            counts[key] = c
 
     def _scope_key_for(self, event: SecurityEvent) -> str:
         if self.config.scope == "global":
             return NetworkState.GLOBAL
         return event.host or NetworkState.GLOBAL
 
-    def _score(self, scope_key: str) -> tuple[float, dict[str, int], Optional[str]]:
-        """Windowed weighted score for a scope, plus evidence counts and the
-        top-contributing host."""
-        total = 0.0
-        evidence: dict[str, int] = {}
-        host_weight: dict[str, float] = {}
-        for ev in self._window:
-            in_scope = (
-                scope_key == NetworkState.GLOBAL
-                or ev.host == scope_key
-                or (ev.host is None and scope_key == NetworkState.GLOBAL)
-            )
-            if not in_scope:
-                continue
-            # Explicit per-signal config weight wins; otherwise use the event's
-            # own weight (set by whichever parser - attacker outcomes or sensors).
-            w = self.config.weights.get(ev.signal, ev.weight)
-            total += w
-            evidence[ev.signal] = evidence.get(ev.signal, 0) + 1
-            if ev.host is not None:
-                host_weight[ev.host] = host_weight.get(ev.host, 0.0) + w
-        implicated: Optional[str]
-        if scope_key != NetworkState.GLOBAL:
-            implicated = scope_key
-        elif host_weight:
-            implicated = max(host_weight, key=host_weight.get)
-        else:
-            implicated = None
-        return total, evidence, implicated
+    def _scope_total(self, scope_key: str) -> float:
+        """Windowed weighted score for a scope - O(1) from the running aggregates.
+
+        A global scope sums every window event (hosted or not); a host scope sums
+        only that host's events. Per-signal config weights win over the event's own
+        weight; that choice is baked in at _add time.
+        """
+        if scope_key == NetworkState.GLOBAL:
+            return self._g_total
+        return self._h_total.get(scope_key, 0.0)
+
+    def _scope_detail(self, scope_key: str) -> tuple[dict[str, int], Optional[str]]:
+        """Evidence snapshot + implicated host for a scope that is about to fire.
+
+        Returned dicts are copies, so a stored detection keeps the window state at
+        firing time. For a global scope the implicated host is the top-weighted one
+        (ties break by first appearance; immaterial to the metrics)."""
+        if scope_key == NetworkState.GLOBAL:
+            implicated = max(self._h_total, key=self._h_total.get) if self._h_total else None
+            return dict(self._g_evi), implicated
+        return dict(self._h_evi.get(scope_key, {})), scope_key
 
     def _armed(self, scope_key: str, now: float) -> bool:
         """Whether a (fresh) detection may fire for this scope.
