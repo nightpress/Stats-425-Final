@@ -12,6 +12,7 @@ ENV=equifax_large
 C2=http://192.168.201.10:8888
 COMPOSE="docker compose -f docker/docker-compose.yml -f docker/docker-compose.run.yml -f docker/docker-compose.dbpivot.yml"
 SCRIPTED=${SCRIPTED:-8}; LLM=${LLM:-8}; BENIGN=${BENIGN:-10}; PER_EP_TIMEOUT=${PER_EP_TIMEOUT:-900}
+mkdir -p "$LIB"  # the .caplog redirect below writes here; a failed redirect aborts the whole capture
 
 # Ensure the DB-pivot implant payload is staged (gitignored; a setup step).
 [ -s incalmo/c2server/payloads/sandcat.go-linux ] || \
