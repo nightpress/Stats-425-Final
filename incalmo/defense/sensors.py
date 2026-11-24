@@ -30,6 +30,7 @@ _FALCO_RULES: dict[str, tuple[str, float]] = {
     "Redirect STDOUT/STDIN to Network Connection in Container": ("c2", 3.0),
     "Launch Remote File Copy Tools in Container": ("lateral-movement", 4.0),
     "Netcat Remote Code Execution in Container": ("exploitation", 4.0),
+    "Drop and execute new binary in container": ("execution", 4.0),
     "Create files below dev": ("execution", 1.0),
     "Clear Log Activities": ("defense-evasion", 3.0),
     "Packet socket created in container": ("recon", 2.0),
