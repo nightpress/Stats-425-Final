@@ -8,12 +8,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-# model_id            id_suffix  reps
+# model_id            id_suffix  reps   (untested refusal-candidates first; the
+# compliant haiku-4-5 is last and already has episodes, so it resumes/skips).
 ARMS=(
-  "claude-haiku-4-5    haiku45    5"
-  "claude-opus-4-5     opus45     5"
-  "claude-sonnet-4-6   sonnet46   5"
-  "claude-opus-4-8     opus48     5"
+  "claude-opus-4-5     opus45     3"
+  "claude-sonnet-4-6   sonnet46   3"
+  "claude-opus-4-8     opus48     3"
+  "claude-haiku-4-5    haiku45    3"
 )
 
 rm -f research/out/caplib/GRADIENT_DONE
