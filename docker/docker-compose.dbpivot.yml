@@ -1,0 +1,19 @@
+# DB-pivot fix: Incalmo's SSHSpawnAgent points every pivoted victim at a single
+# global agent_c2c_server for both implant download and beacon. The DB is on
+# db_network (192.168.201.0/24) only and cannot reach the C2 at 192.168.200.10,
+# so the DB implant never lands and exfiltration no-ops. Attaching the C2 to
+# db_network (192.168.201.10) makes it reachable from BOTH the webserver
+# (dual-homed on 201.x) and the DB, while the attack still requires the
+# webserver->DB pivot. Then set C2C_SERVER_AGENTS=http://192.168.201.10:8888.
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.run.yml \
+#     -f docker/docker-compose.dbpivot.yml up -d
+services:
+  attacker:
+    networks:
+      attacker_network:
+        ipv4_address: 192.168.199.10
+      web_network:
+        ipv4_address: 192.168.200.10
+      db_network:
+        ipv4_address: 192.168.201.10

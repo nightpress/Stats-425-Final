@@ -240,8 +240,9 @@ def cmd_scripted(args: argparse.Namespace) -> None:
             print(f"[run ] {eid}  (scripted {args.strategy}, $0)")
             _write_strategy_config(args.environment, f"scripted_{args.key}_{rep}", args.strategy)
             try:
+                env = dict(os.environ, INCALMO_OUTPUT_DIR=episode_dir)
                 subprocess.run([sys.executable, "main.py"], cwd=REPO_ROOT,
-                               env=dict(os.environ), timeout=args.timeout, check=False)
+                               env=env, timeout=args.timeout, check=False)
             except subprocess.TimeoutExpired:
                 print(f"[warn] {eid} timed out after {args.timeout}s")
             ran += 1

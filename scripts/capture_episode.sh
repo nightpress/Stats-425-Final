@@ -16,10 +16,11 @@ EPISODE_DIR="${1:?usage: capture_episode.sh <episode_dir> <run-cmd...>}"; shift
 SENSORS="$EPISODE_DIR/sensors"
 mkdir -p "$SENSORS"
 NETS='net 192.168.199.0/24 or net 192.168.200.0/24 or net 192.168.201.0/24'
-FALCO_LOG=/var/log/falco/falco.json
+# Falco runs as a systemd service and emits JSON to the journal (not a file).
+FALCO_UNIT=$(systemctl is-active --quiet falco-modern-bpf && echo falco-modern-bpf || echo falco)
 
-start_ts=$(date -u +%Y-%m-%dT%H:%M:%S)
-echo "[capture] start $start_ts  -> $SENSORS"
+start_epoch=$(date +%s)
+echo "[capture] start $(date -u +%Y-%m-%dT%H:%M:%S) (falco unit: $FALCO_UNIT) -> $SENSORS"
 
 # 1) start network capture across the range subnets (all docker bridges via -i any)
 tcpdump -i any -n -s 0 -w "$SENSORS/traffic.pcap" "$NETS" >/dev/null 2>&1 &
@@ -34,8 +35,8 @@ echo "[capture] running episode: $*"
 sleep 1
 kill "$TCPDUMP_PID" 2>/dev/null || true
 wait "$TCPDUMP_PID" 2>/dev/null || true
-end_ts=$(date -u +%Y-%m-%dT%H:%M:%S)
-echo "[capture] end $end_ts"
+end_epoch=$(date +%s)
+echo "[capture] end $(date -u +%Y-%m-%dT%H:%M:%S)"
 
 # 4) Suricata offline over the pcap -> network sensor events
 if command -v suricata >/dev/null 2>&1; then
@@ -45,13 +46,10 @@ if command -v suricata >/dev/null 2>&1; then
     || echo "[capture] suricata run failed"
 fi
 
-# 5) slice Falco host-EDR events to the episode window
-if [ -f "$FALCO_LOG" ]; then
-  awk -v a="$start_ts" -v b="$end_ts" '
-    { if (match($0, /"time":"[^"]+"/)) { t=substr($0,RSTART+8,19); if (t>=a && t<=b) print } }' \
-    "$FALCO_LOG" > "$SENSORS/falco.json" 2>/dev/null || true
-  echo "[capture] falco events in window: $(wc -l < "$SENSORS/falco.json" 2>/dev/null || echo 0)"
-fi
+# 5) pull Falco host-EDR events for the episode window from the journal (JSON lines)
+journalctl -u "$FALCO_UNIT" -o cat --since "@$start_epoch" --until "@$end_epoch" 2>/dev/null \
+  | grep '^{' > "$SENSORS/falco.json" || true
+echo "[capture] falco events in window: $(wc -l < "$SENSORS/falco.json" 2>/dev/null || echo 0)"
 
 echo "[capture] sensor outputs in $SENSORS"
 ls -la "$SENSORS" 2>/dev/null
