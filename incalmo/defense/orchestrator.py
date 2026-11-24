@@ -122,7 +122,9 @@ class DefenseOrchestrator:
             )
             if not in_scope:
                 continue
-            w = self.config.weight_for(ev.signal)
+            # Explicit per-signal config weight wins; otherwise use the event's
+            # own weight (set by whichever parser - attacker outcomes or sensors).
+            w = self.config.weights.get(ev.signal, ev.weight)
             total += w
             evidence[ev.signal] = evidence.get(ev.signal, 0) + 1
             if ev.host is not None:

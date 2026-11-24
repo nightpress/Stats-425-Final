@@ -1,55 +1,69 @@
 #!/usr/bin/env bash
-# Phase 1: capture INDEPENDENT sensor telemetry around a single episode, then
-# run Suricata offline on the captured traffic. Produces, inside the episode dir:
-#   sensors/traffic.pcap        raw network capture of the range subnets
-#   sensors/suricata/eve.json   Suricata IDS alerts + flows (the network sensor)
-#   sensors/falco.json          host EDR events for the episode window
-# The episode's own actions.json stays as GROUND TRUTH (labels), never fed to the
-# defender; the defender will consume the sensors/ outputs.
+# Phase 1: capture INDEPENDENT sensor telemetry around a single episode.
+# Network: tcpdump on each docker bridge (real Ethernet frames; NOT `-i any`,
+# whose Linux-cooked linktype Suricata decodes as 0 packets), then Suricata
+# offline per-pcap with ET Open rules. Host: Falco events from the journal.
+# Produces, inside the episode dir:
+#   sensors/<network>.pcap        per-network packet capture
+#   sensors/suricata_eve.json     concatenated Suricata events/alerts
+#   sensors/falco.json            host-EDR events for the episode window
+# The episode's actions.json stays GROUND TRUTH (labels), never fed to the defender.
 #
-# Usage (run on the VM host, range already up):
-#   scripts/capture_episode.sh <episode_dir> <run-cmd...>
-# where <run-cmd...> launches ONE episode (e.g. a docker compose exec ... run_sweep).
+# Usage (on the VM host, range up):  scripts/capture_episode.sh <episode_dir> <run-cmd...>
 set -euo pipefail
 
 EPISODE_DIR="${1:?usage: capture_episode.sh <episode_dir> <run-cmd...>}"; shift
 SENSORS="$EPISODE_DIR/sensors"
 mkdir -p "$SENSORS"
-NETS='net 192.168.199.0/24 or net 192.168.200.0/24 or net 192.168.201.0/24'
-# Falco runs as a systemd service and emits JSON to the journal (not a file).
+NETWORKS="${CAPTURE_NETWORKS:-docker_web_network docker_db_network docker_attacker_network}"
 FALCO_UNIT=$(systemctl is-active --quiet falco-modern-bpf && echo falco-modern-bpf || echo falco)
 
 start_epoch=$(date +%s)
-echo "[capture] start $(date -u +%Y-%m-%dT%H:%M:%S) (falco unit: $FALCO_UNIT) -> $SENSORS"
+echo "[capture] start $(date -u +%Y-%m-%dT%H:%M:%S) (falco: $FALCO_UNIT) -> $SENSORS"
 
-# 1) start network capture across the range subnets (all docker bridges via -i any)
-tcpdump -i any -n -s 0 -w "$SENSORS/traffic.pcap" "$NETS" >/dev/null 2>&1 &
-TCPDUMP_PID=$!
-sleep 1  # let tcpdump bind before the episode generates traffic
-
-# 2) run the episode (whatever command was passed)
-echo "[capture] running episode: $*"
-"$@" || echo "[capture] episode command returned non-zero (continuing to collect sensors)"
-
-# 3) stop capture
+# 1) one tcpdump per docker bridge (Ethernet linktype Suricata can decode)
+declare -a TPIDS=()
+for n in $NETWORKS; do
+  id=$(docker network inspect "$n" -f '{{.Id}}' 2>/dev/null | cut -c1-12) || continue
+  [ -n "$id" ] || continue
+  br="br-$id"
+  ip link show "$br" >/dev/null 2>&1 || { echo "[capture] bridge $br for $n missing, skip"; continue; }
+  # Disable offload so the capture has real on-wire segments; GRO/GSO coalescing
+  # breaks Suricata's stream reassembly (-> stream anomalies, no app-layer rules).
+  ethtool -K "$br" gro off gso off tso off lro off 2>/dev/null || true
+  tcpdump -i "$br" -n -s 0 -w "$SENSORS/${n}.pcap" >/dev/null 2>&1 &
+  TPIDS+=($!)
+  echo "[capture] tcpdump on $br ($n)"
+done
 sleep 1
-kill "$TCPDUMP_PID" 2>/dev/null || true
-wait "$TCPDUMP_PID" 2>/dev/null || true
+
+# 2) run the episode
+echo "[capture] running: $*"
+"$@" || echo "[capture] episode command returned non-zero (continuing)"
+
+# 3) stop captures
+sleep 1
+for pid in "${TPIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+wait 2>/dev/null || true
 end_epoch=$(date +%s)
 echo "[capture] end $(date -u +%Y-%m-%dT%H:%M:%S)"
 
-# 4) Suricata offline over the pcap -> network sensor events
-if command -v suricata >/dev/null 2>&1; then
-  mkdir -p "$SENSORS/suricata"
-  suricata -r "$SENSORS/traffic.pcap" -l "$SENSORS/suricata" >/dev/null 2>&1 \
-    && echo "[capture] suricata eve.json: $(wc -l < "$SENSORS/suricata/eve.json" 2>/dev/null || echo 0) events" \
-    || echo "[capture] suricata run failed"
-fi
+# 4) Suricata offline per pcap -> concatenated eve.json (ET Open rules)
+: > "$SENSORS/suricata_eve.json"
+for pcap in "$SENSORS"/*.pcap; do
+  [ -s "$pcap" ] || continue
+  tmp=$(mktemp -d)
+  # -k none: virtual-interface capture has offloaded (invalid) checksums; without
+  # this Suricata floods invalid-checksum alerts and skips stream reassembly/ET rules.
+  suricata -r "$pcap" -l "$tmp" -k none >/dev/null 2>&1 || true
+  cat "$tmp/eve.json" >> "$SENSORS/suricata_eve.json" 2>/dev/null || true
+  rm -rf "$tmp"
+done
+alerts=$(grep -c '"event_type":"alert"' "$SENSORS/suricata_eve.json" 2>/dev/null || echo 0)
+echo "[capture] suricata events: $(wc -l < "$SENSORS/suricata_eve.json" 2>/dev/null || echo 0) (alerts: $alerts)"
 
-# 5) pull Falco host-EDR events for the episode window from the journal (JSON lines)
+# 5) Falco host-EDR events for the episode window from the journal
 journalctl -u "$FALCO_UNIT" -o cat --since "@$start_epoch" --until "@$end_epoch" 2>/dev/null \
   | grep '^{' > "$SENSORS/falco.json" || true
-echo "[capture] falco events in window: $(wc -l < "$SENSORS/falco.json" 2>/dev/null || echo 0)"
-
-echo "[capture] sensor outputs in $SENSORS"
+echo "[capture] falco events: $(wc -l < "$SENSORS/falco.json" 2>/dev/null || echo 0)"
 ls -la "$SENSORS" 2>/dev/null
