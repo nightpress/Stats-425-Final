@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 from typing import Optional
 from dataclasses import field
@@ -34,9 +34,18 @@ class LLMStrategyConfig(BaseModel):
     abstraction: AbstractionLevel
 
 
+class StealthConfig(BaseModel):
+    """Offline E3 experiment metadata; not consumed by attacker execution."""
+    enabled: bool = False
+    inter_action_delay: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    randomized_timing: bool = False
+    scan_breadth: Optional[int] = Field(default=None, ge=1)
+
+
 class StateMachineStrategy(BaseModel):
     name: str
     script_path: Optional[str] = None
+    stealth: StealthConfig = Field(default_factory=StealthConfig)
 
 
 def convert_to_environment(env: str) -> Environment:

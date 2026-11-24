@@ -19,6 +19,8 @@ from itertools import product
 
 from incalmo.defense.config import DefenseConfig
 
+from config.attacker_config import StealthConfig
+
 # ---- episode-library axes (these cost money) --------------------------------
 
 # Bulk attacker (cheap). Add "claude-sonnet-5-5" for the invariance arm.
@@ -49,6 +51,10 @@ LLM_ATTACKERS: list[dict] = [
     {"key": "opus", "llm": "claude-opus-5-5", "abstraction": "incalmo", "autonomy": "llm"},
 ]
 
+# ---- Phase 3: E3 offline fixture conditions -------------------------------
+
+STEALTH: list[bool] = [False, True]
+STEALTH_REPLICATES: int = 12
 
 def scripted_for_env(environment: str) -> list[dict]:
     """Scripted attackers compatible with a topology (topo-agnostic + matching)."""
@@ -86,4 +92,35 @@ def episode_plan(include_invariance_arm: bool = False) -> list[dict]:
         for rep in range(BENIGN_REPLICATES):
             plan.append({"attacker_model": ATTACKER_MODELS[0], "environment": env,
                          "replicate": rep, "benign": True})
+    return plan
+
+def e3_fixture_plan(
+    replicates: int = STEALTH_REPLICATES
+) -> list[dict]:
+    """Generate offline E3 fixture specifications."""
+
+    if replicates < 1:
+        raise ValueError("replicates must be positive")
+
+    plan: list[dict] = []
+
+    for env in ENVIRONMENTS:
+        for attacker in scripted_for_env(env):
+            for stealth, rep in product(
+                STEALTH, range(replicates)
+            ):
+                config = StealthConfig(enabled=stealth)
+
+                plan.append({
+                    "experiment": "E3",
+                    "attacker": attacker["key"],
+                    "strategy": attacker["strategy"],
+                    "autonomy": "scripted",
+                    "environment": env,
+                    "replicate": rep,
+                    "stealth": stealth,
+                    "stealth_config": config.model_dump(),
+                    "benign": False,
+                })
+
     return plan

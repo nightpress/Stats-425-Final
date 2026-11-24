@@ -16,6 +16,8 @@ import json
 import os
 import random
 from datetime import datetime, timedelta
+from config.attacker_config import StealthConfig
+from pathlib import Path
 
 
 def _line(ts: datetime, type_: str, action_name: str, results: dict | None = None,
@@ -124,6 +126,36 @@ def make_library(out_dir: str, n_scripted: int = 12, n_llm: int = 12,
     print(f"synthesized {n_scripted} scripted + {n_llm} llm + {n_benign} benign -> {out_dir}")
     return out_dir
 
+def write_e3_fixture(
+    path,
+    lines,
+    attacker_model,
+    environment,
+    n_exfil,
+    stealth_config
+):
+    config = StealthConfig.model_validate(stealth_config)
+
+    _write_episode(
+        str(path),
+        lines,
+        attacker_model,
+        environment,
+        n_exfil,
+        benign=False
+    )
+
+    metadata = {
+        "experiment": "E3",
+        "synthetic": True,
+        "stealth": config.enabled,
+        "stealth_config": config.model_dump()
+    }
+
+    with (Path(path) / "e3_config.json").open(
+        "w", encoding="utf-8"
+    ) as f:
+        json.dump(metadata, f, indent=2)
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
