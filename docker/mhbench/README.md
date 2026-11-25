@@ -178,6 +178,12 @@ and worth knowing before debugging a new topology:
    (a file-busy conflict, not a credential/permission problem - diagnose by
    `docker exec <target> pgrep -af sandcat`). Fix:
    `docker compose -f <compose file> down && up -d` before re-running.
+   The same restart-race class hit `scripts/live_defender_sweep.sh`'s rep 0
+   once ("No attacker agent found" from `exfiltrate_data.py` - the fresh
+   `webserver`/`db` restart the sweep does between reps as its own safety
+   margin hadn't finished re-registering the implant yet); not a new bug,
+   just this gotcha showing up on a different restart path. Dropped that
+   rep rather than special-casing a retry.
 
 ## Running a topology
 

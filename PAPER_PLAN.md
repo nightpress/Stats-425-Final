@@ -161,8 +161,19 @@ a hard external-validity limitation, not downplayed - see below.
   counterfactual) intervention - tails the live Falco journal, scores with
   the identical orchestrator, and actually terminates agents via the C2's
   existing `/agent/delete/<paw>` on detection. Falco-only, global-scope (see
-  module docstring for why); validated live (dry-run then real) against a
-  scripted episode.
+  module docstring for why). Replicated N=5 (`scripts/live_defender_sweep.sh`):
+  1 rep dropped (a known restart-race flakiness, "No attacker agent found" -
+  see `docker/mhbench/README.md`), and of the 4 valid reps, **0/4 were
+  detected/contained live** - the scripted attacker completed its full
+  exfiltration chain uninterrupted every time. This is a REAL, sobering
+  finding, not a bug: it contrasts with the one earlier ad hoc demonstration
+  that did show a successful live containment, and shows the live
+  Falco-only/global-scope policy's real-world reliability is lower than the
+  main study's offline-replay prevention numbers suggest - replaying a
+  detection policy against a pre-recorded trace cannot capture the live
+  timing/race effects (journal lag, window-vs-tempo interaction) that a real
+  intervention is actually exposed to. Report this as its own number, not
+  folded into the main replay-based prevention rate.
 - ▢ NOT built (see Environments above): a second vulnerability class/topology.
 
 ## Honest limitations to state in any submission
@@ -172,7 +183,10 @@ class / topology** - the main study is Struts/`equifax_large` only, and the
 two MHBench-lite environments (`docker/mhbench/`) are n=1 episode each so
 far (a feasibility/corroboration result, not yet a powered one - see
 Environments above); the closed-loop ablation is Falco-only and global-scope,
-not a live replica of the full two-sensor per-host replay result; no
+not a live replica of the full two-sensor per-host replay result, and its
+measured live prevention rate (0/4 valid reps) is markedly lower than the
+offline-replay numbers, underscoring that replay-based prevention estimates
+are an upper bound on real-world live detection, not an estimate of it; no
 sensor-aware adaptive adversary (the attacker in every experiment is
 sensor-oblivious - see THREAT_MODEL.md "Explicit non-goals"); Claude-only
 model coverage (no cross-vendor arm - within-Claude generation/capability
