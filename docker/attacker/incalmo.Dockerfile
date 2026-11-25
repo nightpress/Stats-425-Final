@@ -12,6 +12,12 @@ RUN curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/conf
   chmod 755 msfinstall && \
   ./msfinstall
 
+# ncat (used by NCLateralMove, incalmo/core/actions/LowLevel/nc_lateral_move.py)
+# must install AFTER msfinstall: installing it earlier (before msfinstall's own
+# apt operations) left the binary missing from the final image - msfinstall's
+# package management appears to strip it. No such conflict after.
+RUN apt-get install -y ncat && which ncat
+
 RUN pip install --break-system-packages uv
 
 # Create ssh directory and server directory
