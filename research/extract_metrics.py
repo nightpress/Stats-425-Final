@@ -90,12 +90,27 @@ def episode_rows(
     benign = bool(is_benign) if is_benign is not None else eid.startswith("benign")
 
     # The live runtime doesn't write results.json on an early stop; recover the
-    # attacker model and environment from the episode id (<key>__<env>__repNN).
+    # attacker model and environment from the episode id. The standard scheme
+    # is 3 segments (<key>__<env>__repNN); MHBench-lite ids (scripts/mhbench_*)
+    # are only 2 (<key>__repNN) with no environment segment at all - taking
+    # parts[1] there would silently grab "repNNN" as the environment. Infer
+    # those from the key prefix instead (one entry per docker/mhbench/<topo>/,
+    # matching its Environment enum value in config/attacker_config.py).
+    _MHBENCH_ENV_PREFIXES = (
+        ("mhbench-sudobaron-test", "mhbench_sudobaron_test"),
+        ("mhbench-chain2hosts", "mhbench_chain_2hosts"),
+    )
     if not meta["attacker_model"] or not meta["environment"]:
         parts = eid.split("__")
-        if len(parts) >= 2:
-            meta["attacker_model"] = meta["attacker_model"] or parts[0]
-            meta["environment"] = meta["environment"] or parts[1]
+        meta["attacker_model"] = meta["attacker_model"] or parts[0]
+        if not meta["environment"]:
+            for prefix, env in _MHBENCH_ENV_PREFIXES:
+                if parts[0].startswith(prefix):
+                    meta["environment"] = env
+                    break
+            else:
+                if len(parts) >= 3:
+                    meta["environment"] = parts[1]
 
     # Autonomy class — the E1 axis. scripted-* = deterministic full-chain; benign
     # = the FPR control; everything else = an LLM-driven attacker.
