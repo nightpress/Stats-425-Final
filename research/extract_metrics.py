@@ -99,6 +99,7 @@ def episode_rows(
     _MHBENCH_ENV_PREFIXES = (
         ("mhbench-sudobaron-test", "mhbench_sudobaron_test"),
         ("mhbench-chain2hosts", "mhbench_chain_2hosts"),
+        ("mhbench-netcat", "mhbench_netcat_test"),
     )
     if not meta["attacker_model"] or not meta["environment"]:
         parts = eid.split("__")

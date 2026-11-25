@@ -55,4 +55,10 @@ class EnvironmentInitializer:
             # 192.168.211.0/24 for the same collision-avoidance reason as above.
             # defender_subnet is unreachable per that spec and is omitted here.
             return Network([Subnet("192.168.211.0/24")])
+        elif self.attacker_config.environment == Environment.MHBENCH_NETCAT_TEST.value:
+            # docker/mhbench/netcat_test/docker-compose.yml: attacker + host0
+            # on one shared bridge (no MHBench topology isolates netcat_shell
+            # alone, so this is built at the same minimal scale as
+            # sudobaron_test rather than drawn from one specific spec file).
+            return Network([Subnet("192.168.212.0/24")])
         return Network([Subnet("192.168.200.0/24")])

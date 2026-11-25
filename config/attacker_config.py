@@ -19,6 +19,7 @@ class Environment(Enum):
     # MHBench/environments/instrumented/<name>_instrumented.json exactly.
     MHBENCH_SUDOBARON_TEST = "mhbench_sudobaron_test"
     MHBENCH_CHAIN_2HOSTS = "mhbench_chain_2hosts"
+    MHBENCH_NETCAT_TEST = "mhbench_netcat_test"
 
 
 class AbstractionLevel(str, Enum):

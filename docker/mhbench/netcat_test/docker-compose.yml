@@ -1,0 +1,55 @@
+# MHBench-lite: a minimal topology (attacker + host0) exercising Incalmo's
+# OTHER hardcoded lateral-move path (NCLateralMove, port 4444) that no
+# episode in this study has exercised yet. Not drawn from one specific
+# MHBench topology JSON (no MHBench topology isolates netcat_shell alone -
+# it only appears mixed into larger multi-host topologies); built at the
+# SAME minimal scale as sudobaron_test using MHBench's own netcat_shell.yml
+# playbook pattern (docker/mhbench/README.md).
+#
+# No SSH credential needed here at all: NCLateralMove connects directly to
+# the listening port, no credential-based gating.
+#
+# Run (from repo root):
+#   docker compose -f docker/mhbench/netcat_test/docker-compose.yml up -d --build
+networks:
+  target_subnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.212.0/24
+
+services:
+  attacker:
+    build:
+      context: ../../..
+      dockerfile: docker/attacker/incalmo.Dockerfile
+    env_file:
+      - ../../../.env
+    environment:
+      - SERVER_IP=localhost
+      - MODE=docker
+      - DEBUG=true
+    volumes:
+      - ../../..:/incalmo
+      - frontend-ignore:/incalmo/incalmo/frontend
+      - venv-volume:/incalmo/.venv
+    networks:
+      target_subnet:
+        ipv4_address: 192.168.212.100
+    ports:
+      - "0.0.0.0:8891:8888"
+      - "127.0.0.1:6382:6379"
+      - "127.0.0.1:5681:5678"
+
+  host0:
+    build:
+      context: ../ubuntu_netcat
+    container_name: mhbench_netcat_host0
+    restart: always
+    networks:
+      target_subnet:
+        ipv4_address: 192.168.212.10
+
+volumes:
+  venv-volume:
+  frontend-ignore:
