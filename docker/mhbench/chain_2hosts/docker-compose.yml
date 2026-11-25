@@ -1,0 +1,68 @@
+# MHBench-lite: a Docker re-deployment of MHBench's real
+# chain_2hosts_instrumented.json topology (3 of its hosts - defender_subnet
+# is unreachable per that spec's subnet_connections and is omitted). See
+# docker/mhbench/README.md for the full design rationale.
+#
+# attacker_subnet <-> ring_subnet are directly connected per that spec
+# (bidirectional, no intermediate host); one shared bridge reproduces that.
+# host0 <-> host1 lateral movement is via a baked SSH credential chain
+# (no network CVE in this topology - see docker/mhbench/chain_2hosts/host0).
+#
+# Run (from repo root):
+#   docker compose -f docker/mhbench/chain_2hosts/docker-compose.yml up -d --build
+networks:
+  ring_subnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.211.0/24
+
+services:
+  attacker:
+    build:
+      context: ../../..
+      dockerfile: docker/attacker/incalmo.Dockerfile
+    env_file:
+      - ../../../.env
+    environment:
+      - SERVER_IP=localhost
+      - MODE=docker
+      - DEBUG=true
+    volumes:
+      - ../../..:/incalmo
+      - frontend-ignore:/incalmo/incalmo/frontend
+      - venv-volume:/incalmo/.venv
+      - ./attacker_ssh/config:/root/.ssh/config:ro
+      - ./attacker_ssh/id_rsa:/root/.ssh/mhbench_id_rsa:ro
+    networks:
+      ring_subnet:
+        ipv4_address: 192.168.211.100
+    ports:
+      # Host ports shifted to avoid colliding with the main Equifax range's
+      # attacker (8888/6379/5678) or sudobaron_test's own (8889/6380/5679)
+      # if more than one MHBench-lite stack is ever up simultaneously.
+      - "0.0.0.0:8890:8888"
+      - "127.0.0.1:6381:6379"
+      - "127.0.0.1:5680:5678"
+
+  host0:
+    build:
+      context: ./host0
+    container_name: mhbench_chain2_host0
+    restart: always
+    networks:
+      ring_subnet:
+        ipv4_address: 192.168.211.10
+
+  host1:
+    build:
+      context: ./host1
+    container_name: mhbench_chain2_host1
+    restart: always
+    networks:
+      ring_subnet:
+        ipv4_address: 192.168.211.11
+
+volumes:
+  venv-volume:
+  frontend-ignore:

@@ -1,0 +1,67 @@
+# MHBench-lite: a Docker re-deployment of MHBench's real
+# sudobaron_test_instrumented.json topology (2 of its hosts - defender_subnet
+# is unreachable per that spec's subnet_connections and is omitted), using
+# Incalmo's existing attacker container unchanged and a new target image
+# (docker/mhbench/ubuntu_sudobaron) instead of MHBench's own OpenStack/GCP
+# VM backend. See docker/mhbench/README.md for the full design rationale.
+#
+# attacker_subnet <-> target_subnet are directly connected per that spec's
+# subnet_connections (bidirectional, no intermediate host) - one shared
+# bridge reproduces that with no extra router/jump host needed.
+#
+# Instrumentation: no per-host Falco/sysflow baking (unlike MHBench's own
+# "_instrumented" images) - the host's existing Falco daemon already sees
+# every container via eBPF; Suricata capture extends via capture_episode.sh's
+# CAPTURE_NETWORKS override (see docker/mhbench/README.md).
+#
+# Run (from repo root):
+#   docker compose -f docker/mhbench/sudobaron_test/docker-compose.yml up -d --build
+networks:
+  target_subnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.210.0/24
+
+services:
+  attacker:
+    build:
+      context: ../../..
+      dockerfile: docker/attacker/incalmo.Dockerfile
+    env_file:
+      - ../../../.env
+    environment:
+      - SERVER_IP=localhost
+      - MODE=docker
+      - DEBUG=true
+    volumes:
+      - ../../..:/incalmo
+      - frontend-ignore:/incalmo/incalmo/frontend
+      - venv-volume:/incalmo/.venv
+      # Credential staging mirrors docker/equifax/webserver's pattern: a
+      # discoverable SSH config + private key pointing at host0, matching
+      # MHBench's own setup_ssh_keys playbook for this isolated-exploit test.
+      - ./attacker_ssh/config:/root/.ssh/config:ro
+      - ./attacker_ssh/id_rsa:/root/.ssh/mhbench_id_rsa:ro
+    networks:
+      target_subnet:
+        ipv4_address: 192.168.210.100
+    ports:
+      # Host ports shifted by +1 to avoid colliding with the main Equifax
+      # range's attacker (bound to 8888/6379/5678) if both are up at once.
+      - "0.0.0.0:8889:8888"
+      - "127.0.0.1:6380:6379"
+      - "127.0.0.1:5679:5678"
+
+  host0:
+    build:
+      context: ../ubuntu_sudobaron
+    container_name: mhbench_sudobaron_host0
+    restart: always
+    networks:
+      target_subnet:
+        ipv4_address: 192.168.210.10
+
+volumes:
+  venv-volume:
+  frontend-ignore:

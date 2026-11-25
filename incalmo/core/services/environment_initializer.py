@@ -38,4 +38,21 @@ class EnvironmentInitializer:
                     Subnet("192.168.204.0/24"),
                 ]
             )
+        elif self.attacker_config.environment == Environment.MHBENCH_SUDOBARON_TEST.value:
+            # Matches MHBench/environments/instrumented/sudobaron_test_instrumented.json:
+            # target_subnet (host0) <-> attacker_subnet (attacker), merged onto one
+            # Docker bridge (docker/mhbench/sudobaron_test/docker-compose.yml) since
+            # that spec connects them directly with no intermediate host. Shifted to
+            # 192.168.210.0/24 (off the main range's 199-201 block) so this topology
+            # can run alongside the main Equifax range without a subnet collision.
+            # defender_subnet is unreachable per that spec and is omitted here.
+            return Network([Subnet("192.168.210.0/24")])
+        elif self.attacker_config.environment == Environment.MHBENCH_CHAIN_2HOSTS.value:
+            # Matches MHBench/environments/instrumented/chain_2hosts_instrumented.json:
+            # ring_subnet (host0, host1) <-> attacker_subnet (attacker), merged onto
+            # one Docker bridge (docker/mhbench/chain_2hosts/docker-compose.yml) since
+            # that spec connects them directly with no intermediate host. Shifted to
+            # 192.168.211.0/24 for the same collision-avoidance reason as above.
+            # defender_subnet is unreachable per that spec and is omitted here.
+            return Network([Subnet("192.168.211.0/24")])
         return Network([Subnet("192.168.200.0/24")])

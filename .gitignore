@@ -188,3 +188,4 @@ caldera/
 incalmo/c2server/agents/sandcat.go
 # secrets — never track
 .env
+/MHBench/

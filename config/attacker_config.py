@@ -13,6 +13,12 @@ class Environment(Enum):
     RING = "ring"
     ENTERPRISE_A = "enterprise_a"
     ENTERPRISE_B = "enterprise_b"
+    # MHBench-lite (real MHBench topology JSON, re-deployed as a Docker range
+    # instead of MHBench's own OpenStack/GCP VM backend - see
+    # docker/mhbench/README.md). Subnet shape matches
+    # MHBench/environments/instrumented/<name>_instrumented.json exactly.
+    MHBENCH_SUDOBARON_TEST = "mhbench_sudobaron_test"
+    MHBENCH_CHAIN_2HOSTS = "mhbench_chain_2hosts"
 
 
 class AbstractionLevel(str, Enum):

@@ -1,0 +1,5 @@
+Host host0
+    IdentityFile /root/.ssh/mhbench_id_rsa
+    HostName 192.168.210.10
+    User ubuntu
+    StrictHostKeyChecking no
