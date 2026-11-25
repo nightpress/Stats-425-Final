@@ -79,6 +79,37 @@ def _bootstrap_ci(values: np.ndarray, stat=np.mean, n: int = 2000, seed: int = 0
     return (float(stat(values)), float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5)))
 
 
+def _benign_profile(attacker_model: str) -> str:
+    """("benign") -> "steady" (the original default tempo); ("benign-light") ->
+    "light"; ("benign-heavy") -> "heavy"; anything else -> "-"."""
+    if not isinstance(attacker_model, str) or not attacker_model.startswith("benign"):
+        return "-"
+    rest = attacker_model[len("benign"):]
+    return rest[1:] if rest.startswith("-") else "steady"
+
+
+def benign_fpr_by_profile(df: pd.DataFrame, scope: str = "global",
+                           window: Optional[float] = None, threshold: Optional[float] = None):
+    """Does FPR=0 hold across different benign BEHAVIOR INTENSITIES (light/
+    steady/heavy tempo - see incalmo/.../benign_admin.py), or only the one
+    profile most of the library happened to use? One row per profile, at a
+    fixed (window, threshold, scope) operating point (default: the attack
+    grid's median cell, for comparability with E1/E2's reported point)."""
+    benign = df[df["is_benign"]].copy()
+    if benign.empty:
+        return None, None
+    benign["profile"] = benign["attacker_model"].map(_benign_profile)
+    w = window if window is not None else float(benign["window_seconds"].median())
+    t = threshold if threshold is not None else float(benign["threshold"].median())
+    cell = benign[(benign["window_seconds"] == w) & (benign["threshold"] == t)
+                  & (benign["scope"] == scope)]
+    rows = []
+    for prof, g in cell.groupby("profile"):
+        fp, lo, hi = _bootstrap_ci(g["false_positive"].astype(float).values)
+        rows.append({"profile": prof, "n": len(g), "fpr": fp, "ci_lo": lo, "ci_hi": hi})
+    return pd.DataFrame(rows).sort_values("profile"), {"window": w, "threshold": t, "scope": scope}
+
+
 def refusal_by_model(df: pd.DataFrame):
     """Per-attacker refusal rate: fraction of episodes that never left stage 0
     (an API safety refusal at step 0). One row per attacker_model, with a
@@ -428,6 +459,14 @@ def main() -> None:
         print("\nE1b refusal robustness - refusal rate by model x goal framing:")
         piv = rmat.pivot(index="model", columns="framing", values="refusal_rate")
         print(piv.to_string(float_format=lambda v: f"{v:.2f}"))
+
+    bfp, bfp_meta = benign_fpr_by_profile(df)
+    if bfp is not None and not bfp.empty and bfp["profile"].nunique() > 1:
+        bfp.to_csv(os.path.join(args.outdir, "benign_fpr_by_profile.csv"), index=False)
+        print(f"\nBenign FPR by behavior-intensity profile "
+              f"(scope={bfp_meta['scope']}, window={bfp_meta['window']:g}s, threshold={bfp_meta['threshold']:g}):")
+        for _, r in bfp.iterrows():
+            print(f"   {r['profile']:>8}: fpr={r['fpr']:.2f} [{r['ci_lo']:.2f},{r['ci_hi']:.2f}] (n={int(r['n'])})")
 
     summary = summarize(df)
     summary_path = os.path.join(args.outdir, "summary_by_cell.csv")

@@ -16,6 +16,11 @@ SCRIPTED=${SCRIPTED:-8}; LLM=${LLM:-8}; BENIGN=${BENIGN:-10}; PER_EP_TIMEOUT=${P
 # episode-id prefix (llm-<key>); extract_metrics labels every llm-* as autonomy=llm.
 LLM_MODEL=${LLM_MODEL:-claude-haiku-5-5}; LLM_KEY=${LLM_KEY:-haiku}
 export LLM_MODEL
+# Benign arm is parameterized by tempo/scan-breadth profile (benign_admin.py
+# BENIGN_PROFILES: light/steady/heavy). BENIGN_KEY suffixes the episode id
+# (benign-<key>__...) so varied-profile runs don't collide with the original
+# plain "benign__..." episodes (default profile=steady matches that baseline).
+BENIGN_PROFILE=${BENIGN_PROFILE:-steady}; BENIGN_KEY=${BENIGN_KEY:-}
 mkdir -p "$LIB"  # the .caplog redirect below writes here; a failed redirect aborts the whole capture
 
 # Ensure the DB-pivot implant payload is staged (gitignored; a setup step).
@@ -50,7 +55,7 @@ run_one() {  # $1=label $2=type $3=rep
   echo "[run ] $eid ($2)"
   bash scripts/capture_episode.sh "$EP" timeout "$PER_EP_TIMEOUT" \
     $COMPOSE exec -T -e C2C_SERVER_AGENTS="$C2" -e "INCALMO_OUTPUT_DIR=/incalmo/$EP" \
-    -e ATTACK_FRAMING="${ATTACK_FRAMING:-baseline}" \
+    -e ATTACK_FRAMING="${ATTACK_FRAMING:-baseline}" -e INCALMO_BENIGN_PROFILE="$BENIGN_PROFILE" \
     attacker bash -lc "cd /incalmo && uv run python main.py" \
     > "$EP.caplog" 2>&1 || echo "[warn] $eid capture returned non-zero"
   echo "       exfil=$(grep -o ExfiltratedData "$EP/actions.json" 2>/dev/null | wc -l) \
@@ -61,10 +66,11 @@ falco=$(wc -l < "$EP/sensors/falco.json" 2>/dev/null || echo 0)"
 cp config/config.json config/config.json.sweepbak 2>/dev/null || true
 trap 'mv config/config.json.sweepbak config/config.json 2>/dev/null || true' EXIT
 
-echo "=== capture sweep: scripted=$SCRIPTED llm=$LLM ($LLM_MODEL -> llm-$LLM_KEY) benign=$BENIGN ==="
+BENIGN_LABEL="benign"; [ -n "$BENIGN_KEY" ] && BENIGN_LABEL="benign-$BENIGN_KEY"
+echo "=== capture sweep: scripted=$SCRIPTED llm=$LLM ($LLM_MODEL -> llm-$LLM_KEY) benign=$BENIGN (profile=$BENIGN_PROFILE -> $BENIGN_LABEL) ==="
 if [ "$SCRIPTED" -gt 0 ]; then for i in $(seq 0 $((SCRIPTED - 1))); do run_one scripted-equifax scripted "$i"; done; fi
 if [ "$LLM"      -gt 0 ]; then for i in $(seq 0 $((LLM - 1)));      do run_one "llm-$LLM_KEY"  llm      "$i"; done; fi
-if [ "$BENIGN"   -gt 0 ]; then for i in $(seq 0 $((BENIGN - 1)));   do run_one benign          benign   "$i"; done; fi
+if [ "$BENIGN"   -gt 0 ]; then for i in $(seq 0 $((BENIGN - 1)));   do run_one "$BENIGN_LABEL" benign   "$i"; done; fi
 
 touch "$LIB/SWEEP_DONE"
 echo "=== SWEEP COMPLETE: $(ls -d $LIB/*/ 2>/dev/null | wc -l) episodes ==="
