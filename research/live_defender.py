@@ -47,12 +47,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime
+
+
+class _Stop(Exception):
+    """Raised by the SIGTERM handler to unwind through `run`'s `finally`."""
 
 from incalmo.defense import DefenseConfig, DefenseOrchestrator, SecurityEvent
 from incalmo.defense.sensors import parse_falco_line
@@ -114,6 +119,18 @@ def run(episode_dir: str, c2: str, window: float, threshold: float,
                         weights=dict(LIVE_FALCO_WEIGHTS))
     orch = DefenseOrchestrator(cfg)
 
+    # SIGINT is auto-ignored for background jobs launched via `cmd &` in a
+    # non-interactive shell script (POSIX job-control convention), and
+    # CPython detects that inherited ignore-disposition at startup and
+    # does not override it - so a plain `kill -INT` from the launching
+    # script (scripts/live_defender_episode.sh) is a silent no-op here.
+    # SIGTERM has no such auto-ignore rule, so the launcher sends that
+    # instead; this handler converts it into a catchable exception so the
+    # `finally` below still runs and the audit file still gets written.
+    def _on_sigterm(signum, frame):
+        raise _Stop()
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     proc = subprocess.Popen(
         ["journalctl", "-u", falco_unit, "-f", "-o", "cat", "-n", "0"],
         stdout=subprocess.PIPE, text=True, bufsize=1,
@@ -134,13 +151,13 @@ def run(episode_dir: str, c2: str, window: float, threshold: float,
             parsed = parse_falco_line(line)
             if parsed is None:
                 continue
-            ts, signal, category, weight, host, detail = parsed
+            ts, sig_name, category, weight, host, detail = parsed
             n_events += 1
             t = time.monotonic() - start
-            ev = SecurityEvent(index=n_events, timestamp=ts, t=t, signal=signal,
+            ev = SecurityEvent(index=n_events, timestamp=ts, t=t, signal=sig_name,
                                 category=category, weight=weight, host=host, detail=detail)
             detection = orch.process_event(ev)
-            audit.append({"event": "scored", "t": round(t, 2), "signal": signal, "host": host})
+            audit.append({"event": "scored", "t": round(t, 2), "signal": sig_name, "host": host})
             if detection is not None:
                 audit.append({
                     "event": "detection", "t": round(t, 2), "score": detection.score,
@@ -149,6 +166,8 @@ def run(episode_dir: str, c2: str, window: float, threshold: float,
                 killed = contain_everything(c2, audit, dry_run)
                 audit.append({"event": "contained", "n_agents_killed": killed})
                 break  # global containment is terminal for this episode
+    except _Stop:
+        audit.append({"event": "stopped_by_launcher"})
     finally:
         proc.terminate()
         with open(audit_path, "w", encoding="utf-8") as fh:

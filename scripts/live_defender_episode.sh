@@ -53,6 +53,13 @@ timeout "$PER_EP_TIMEOUT" $COMPOSE exec -T -e C2C_SERVER_AGENTS="$C2" -e "INCALM
 ATTACKER_RC=$?
 
 # Give the live defender a moment to finish writing its audit, then stop it.
+# Plain SIGTERM: research/live_defender.py now installs its own SIGTERM
+# handler (raises a catchable exception so its `finally: json.dump(...)`
+# still runs). SIGINT does NOT work here - bash auto-ignores SIGINT for a
+# background job started with `&` in a non-interactive script, and CPython
+# detects that inherited ignore-disposition at startup and keeps it, so
+# `kill -INT` on this process is a silent no-op (found by hand: the sweep
+# hung forever on `wait $DEFENDER_PID` after switching to -INT).
 sleep 2
 kill "$DEFENDER_PID" 2>/dev/null || true
 wait "$DEFENDER_PID" 2>/dev/null || true
