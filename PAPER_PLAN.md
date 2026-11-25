@@ -20,37 +20,56 @@ open **defense / detectability** axis rather than competing on their turf.
 
 ## The four non-negotiables (build order)
 
-### 1. Independent sensor telemetry  — FOUNDATION (in progress)
-Defender must consume what a real SOC sees, not the attacker's self-report.
-- `scripts/sensor_setup.sh`: Suricata (network IDS) + Falco (host EDR, eBPF).
-- `scripts/capture_episode.sh`: pcap the range subnets per episode → Suricata
-  offline (`eve.json`) + Falco host events sliced to the episode window.
-- Keep `actions.json` ONLY as ground-truth labels (attack vs benign, stage times).
-- **Next:** capture one real episode → write parsers against ACTUAL Suricata/Falco
-  output (not assumed schemas) → re-wire `incalmo/defense` to ingest sensor events.
+### 1. Independent sensor telemetry  — ✅ DONE
+Defender consumes Falco + Suricata, not the attacker's self-report.
+- `scripts/sensor_setup.sh` / `scripts/capture_episode.sh`: real schemas, not
+  assumed ones (`incalmo/defense/sensors.py` parses the ACTUAL eve.json/Falco
+  JSON this range produces).
+- `actions.json` is used ONLY as ground-truth labels, never fed to the
+  defender (`research/extract_metrics.py`).
+- Host-EDR reweighting (`research/grid.py::SENSOR_WEIGHTS`) was REQUIRED: raw
+  volume scoring is dominated by benign traffic (benign out-generates every
+  attack class) → FPR=1.0 pre-fix; the host-EDR behaviors that actually
+  separate the classes (untrusted-shell exec, stdout→network, drop-and-
+  execute) bring FPR to 0.014 (0 for threshold≥10). Quantified against
+  baselines in `research/baselines.py` (ours ~3x the detection rate of the
+  best baseline at matched zero FPR).
 
-### 2. Attacker spectrum (autonomy axis)
-Scripted/optimal (`MulvalOptimal`, `OptimalReplay`, `BFS/DFS`, `Darkside`) →
-low-abstraction LLM → high-abstraction LLM (Incalmo), across models (Claude
-Haiku/Sonnet/Opus, + GPT/Gemini/DeepSeek via the registry). Scripted attackers
-complete the full chain incl. exfiltration ($0, no LLM); LLM refusals are a
-*measured* result (the guardrail boundary), not a bug to engineer around.
-**We do not bypass model safety.** Grid expansion in `research/grid.py`.
+### 2. Attacker spectrum (autonomy axis)  — ✅ DONE (within Claude)
+Scripted (`EquifaxStrategy`, deterministic, $0, always completes the chain)
+vs. LLM across the Claude family: Haiku 4.5/5.5 comply (exfil 0-192, bimodal);
+Sonnet/Opus **4.5-4.8** comply; Sonnet/Opus **5.5** refuse 100% at step 0
+(API `finish_reason=refusal`), and that refusal is robust to goal reframing
+(authorized-explicit / access-only / benign-admin — `framings.json`,
+`research/refusal_probe.py`). This is a **5.5-generation safety-training
+shift**, not a capability gradient (opus-4-8 is highly capable and still
+complies). **We did not bypass model safety** to get full-chain LLM data —
+scripted supplies it. NOT done: GPT/Gemini/DeepSeek (Claude-credits-only
+constraint for this project; the registry supports them for future work).
 
-### 3. Adaptive adversary
-"Low-and-slow" stealth knobs on the scripted attackers (inter-action delay,
-randomized timing, reduced scan breadth) → does an attacker that knows the
-detection window evade it? Sandbox-only, for defender evaluation. We build
-scripted stealth; we do **not** build real-world evasion tooling or prompt a model
-to defeat its own safeguards.
+### 3. Adaptive adversary  — ✅ DONE, scoped to existing parameters
+Per an explicit project constraint, we vary only parameters/strategies
+already in the repo rather than author new evasion technique/content:
+**attack-tempo** (`incalmo/incalmo_runner.py` `STEP_DELAY_S`, the existing
+inter-step delay, now overridable - `scripts/tempo_sweep.sh`) tests whether
+detection holds as the identical attack is spread across more wall-clock
+time relative to the sliding window. NOT built: a sensor-aware attacker that
+is given the defender's weights and optimized to evade them specifically
+(see `THREAT_MODEL.md` "Explicit non-goals") - that is a materially larger,
+separately-scoped research question we did not take on here.
 
 ### 4. Scale + rigor + released benchmark
-- Scale: {7 topologies} × {attacker spectrum} × {stealth on/off} × {reps}.
-  Scripted = $0; defender sweep is free offline → tens of thousands of rows.
-- Rigor: mixed-effects models (topology/attacker as random effects), effect sizes,
-  bootstrap CIs, multiple-comparison control (`research/analyze.py` + statsmodels).
-- Artifact: environments + captured sensor telemetry + attacker suite + defender,
-  packaged reproducibly. A benchmark others adopt is the high-citation contribution.
+- Scale: single topology (see Environments below) × attacker spectrum
+  (scripted, Haiku 4.5/5.5, Sonnet/Opus 4.5-5.5, 3 goal framings, 3 tempos)
+  × 3 benign tempo/intensity profiles × reps → 95+ episodes, 70-config
+  defender grid, 4340-6650+ scored rows depending on library size.
+- Rigor: bootstrap CIs on every rate, Kaplan-Meier + log-rank for
+  time-to-containment, logistic GLMs (detection/prevention ~ autonomy +
+  window + threshold + scope), refused-vs-engaged split so refusal and
+  detectability are never conflated (`research/analyze.py`).
+- Artifact: captured sensor telemetry + attacker suite + defender + baselines
+  + ablations, all driven by committed, resumable scripts (`README.md`
+  section 3) - reproducible from a clean VM.
 
 ## Experiments that produce the finding
 - **E1 Detectability vs. autonomy:** detection rate / latency on *sensor* telemetry

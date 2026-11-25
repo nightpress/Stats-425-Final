@@ -5,11 +5,14 @@ framework). We add a **reactive defender** and a research harness, and evaluate
 the defender on **independent sensor telemetry** (Falco host-EDR + Suricata
 network) while the attacker's own log provides ground-truth labels.
 
-**Thesis:** the *autonomy* of an LLM attacker changes its *detectability*, and
-frontier-model safety guardrails bound autonomous intrusions at predictable
-kill-chain stages. Full research plan, experiments (E1–E4), and venue strategy
-are in [`PAPER_PLAN.md`](PAPER_PLAN.md). Open tasks are tracked in the repo
-**Issues**.
+**Thesis:** frontier-model safety training bounds autonomous intrusion —
+measurably, robust to goal reframing, and as a specific generation shift (not
+a capability one) — and independent host-EDR telemetry detects the models
+that aren't bounded, substantially outperforming naive baselines, at zero
+false positives across varied benign behavior. Full research plan,
+experiments (E1–E4), threat model ([`THREAT_MODEL.md`](THREAT_MODEL.md)), and
+venue strategy are in [`PAPER_PLAN.md`](PAPER_PLAN.md). Open tasks are
+tracked in the repo **Issues**.
 
 > ⚠️ **Security:** this repo runs a deliberately-vulnerable range (Struts CVE, a
 > C2 server, an implant). Keep it on the sandboxed VM / local Docker only — never
@@ -24,13 +27,23 @@ are in [`PAPER_PLAN.md`](PAPER_PLAN.md). Open tasks are tracked in the repo
 incalmo/defense/      the defender: telemetry, config, orchestrator (sliding-window
                       scoring + simulated remediation + audit), remediation,
                       evaluate, sensors (Falco/Suricata -> SecurityEvent)
-research/             grid.py (experiment design), cost.py (Claude $ + spend cap),
-                      extract_metrics.py (episodes -> tidy CSV), run_sweep.py,
-                      synthesize.py (offline fixture), analyze.py (E1/E2/GLM/curves)
-scripts/              sensor_setup.sh, capture_episode.sh, capture_sweep.sh, vm_setup.sh
+research/             grid.py (experiment design + SENSOR_WEIGHTS), cost.py,
+                      extract_metrics.py (episodes -> tidy CSV), baselines.py
+                      (naive-volume + Suricata-signature baselines, same
+                      scoring machinery), live_defender.py (closed-loop
+                      ablation: real intervention, not replay), run_sweep.py,
+                      refusal_probe.py (fast model-refusal map), synthesize.py
+                      (offline fixture), analyze.py (E1/E1b/E2/E4/GLM/curves/
+                      detector comparison/benign-profile FPR)
+scripts/               sensor_setup.sh, capture_episode.sh, vm_setup.sh,
+                      capture_sweep.sh (scripted/LLM/benign, parameterized by
+                      model/framing/benign-profile/tempo), scale_llm.sh,
+                      framing_sweep.sh, gradient_sweep.sh, benign_profile_sweep.sh,
+                      tempo_sweep.sh, live_defender_episode.sh
 docker/               docker-compose*.yml  (base + .run.yml foothold + .dbpivot.yml)
 tests/test_defense.py pure-stdlib tests (also runnable: python3 tests/test_defense.py)
-PAPER_PLAN.md         thesis, four non-negotiables, experiments E1-E4, venue plan
+PAPER_PLAN.md         thesis, experiments E1-E4, environments scoping, venue plan
+THREAT_MODEL.md        attacker/defender capabilities, visibility, trust boundary
 ```
 
 ## Contributing
@@ -97,17 +110,41 @@ bash scripts/sensor_setup.sh
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.run.yml \
   -f docker/docker-compose.dbpivot.yml up -d --build
 
-# e) generate a captured episode library (resumable; scripted/LLM/benign):
+# e) generate the main captured episode library (resumable; scripted/LLM/benign):
 SCRIPTED=8 LLM=8 BENIGN=10 nohup bash scripts/capture_sweep.sh > caplib_sweep.log 2>&1 &
+
+# f) extract -> analyze (also pulls in research/out/baseline_rows.csv if present):
+PYTHONPATH=. python3 -m research.extract_metrics research/out/caplib --out research/out/caplib_rows.csv
+PYTHONPATH=. python3 -m research.baselines research/out/caplib --out research/out/baseline_rows.csv
+PYTHONPATH=. python3 -m research.analyze research/out/caplib_rows.csv --outdir research/out/caplib
+
+# g) the additional ablations (each independently resumable; run them one at a
+#    time against the shared range — capture_sweep.sh/live_defender_episode.sh
+#    both exec into the same attacker container):
+nohup bash scripts/scale_llm.sh          > research/out/scale_llm.log 2>&1 &          # Sonnet/Opus arms
+nohup bash scripts/framing_sweep.sh      > research/out/framing_sweep.log 2>&1 &      # E1b: goal-reframing robustness
+nohup bash scripts/gradient_sweep.sh     > research/out/gradient_sweep.log 2>&1 &     # within-Claude generation gradient
+nohup bash scripts/benign_profile_sweep.sh > research/out/benign_profile_sweep.log 2>&1 &  # benign-realism (light/heavy tempo)
+nohup bash scripts/tempo_sweep.sh        > research/out/tempo_sweep.log 2>&1 &        # E4a: attack-tempo robustness
+STRATEGY=scripted EP=research/out/caplib/<id> bash scripts/live_defender_episode.sh   # E4b: closed-loop, real intervention
 ```
 
 Key facts (also in `PAPER_PLAN.md` / git history):
 - Episodes run `MODE=docker` (foothold auto-plants); pass
   `C2C_SERVER_AGENTS=http://192.168.201.10:8888` so the DB can fetch the implant.
-- The scripted `EquifaxStrategy` completes the full chain incl. exfiltration;
-  the LLM attacker halts pre-exfil (safety guardrail — a finding, not a bug).
-- Suricata's signature alerts don't reassemble on offloaded container bridges;
-  we use its flow/http/ssh metadata (see `incalmo/defense/sensors.py`).
+- The scripted `EquifaxStrategy` completes the full chain incl. exfiltration.
+  LLM attackers vary sharply by model/generation: Claude 5.5 Sonnet/Opus
+  **refuse outright** (API `finish_reason=refusal`, robust to goal reframing —
+  see `research/refusal_probe.py` / `framings.json`); Haiku and the 4.5-4.8
+  generations comply. This is a safety-training-generation effect, not a
+  capability one (`PAPER_PLAN.md`).
+- Suricata's signature alerts don't reassemble on offloaded container bridges
+  AND don't discriminate attack from benign even when they fire — we use its
+  flow/http/ssh metadata instead, and quantify that choice against
+  signature baselines in `research/baselines.py`.
+- The defender's sensor weights are host-EDR-centric
+  (`research/grid.py::SENSOR_WEIGHTS`) because raw volume scoring is
+  dominated by benign traffic (FPR=1.0 pre-fix) — see git history.
 
 ### 4. Contribution workflow
 
