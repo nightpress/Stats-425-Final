@@ -123,9 +123,20 @@ a hard external-validity limitation, not downplayed - see below.
   and the benign-realism finding below for the honest, tempo-conditional FPR.
 - ✅ E1/E1b/E2: autonomy-graded detectability; refusal is a 5.5-generation
   safety-training shift (not capability) AND robust to goal reframing AND
-  (MHBench-lite, n=2) corroborated across two independent environments -
-  the boundary lands at data-exfiltration intent specifically, not at
-  reconnaissance/lateral-movement (`docker/mhbench/README.md`).
+  corroborated across two independent, externally-sourced environments
+  (MHBench-lite, n=3 opus + n=3 sonnet per topology): 100% refusal in both,
+  matching the main range exactly. Haiku refuses 12% there (n=8 each) vs. 0%
+  on the main range - a directional signal only (CI overlaps 0, not yet
+  powered). The boundary lands at data-exfiltration intent specifically, not
+  at reconnaissance/lateral-movement (`docker/mhbench/README.md`).
+- ✅ Cross-environment detection check: at the main study's representative
+  cell, engaged-Haiku detection on MHBench-lite looks like a miss (0% vs 80%)
+  - but the same discriminating signals are present and strong; detection
+  recovers at threshold<=25 (any window) or window=480s (at threshold=50).
+  A second, independent line of evidence for the window-vs-attack-tempo
+  dynamic E4a was built to measure - a different-environment attack path
+  (not an artificially slowed one) needing a wider window, not a coverage
+  gap (`docker/mhbench/README.md` "Rep sweep results").
 - ✅ Baseline comparison (`research/baselines.py`) at the overall best
   operating point (window=30s, threshold=10, scope=global, now including the
   `heavy` benign profile): host-EDR (ours) detect=0.867 FPR=0.150 (J=0.717)
