@@ -442,6 +442,19 @@ def try_glm(df: pd.DataFrame) -> str:
                           data=a).fit(disp=0)
             out.append("Detection GLM: detected ~ autonomy + window + threshold + scope\n"
                        + str(m.summary2().tables[1]))
+            # Robustness check: the naive-SE fit above treats every (episode,
+            # config) row as an independent observation, but 70 rows per
+            # episode share that episode's unobserved traits - clustering by
+            # episode_id is the standard, dependency-free correction (a full
+            # GLMM would need a new, heavier dependency; this is the
+            # pragmatic choice). Reported alongside, not instead of, the
+            # naive fit so the difference (or lack of one) is visible.
+            if "episode_id" in a:
+                mc = smf.logit("detected_i ~ C(autonomy) + window_seconds + threshold + C(scope)",
+                               data=a).fit(disp=0, cov_type="cluster",
+                                           cov_kwds={"groups": a["episode_id"]})
+                out.append("Detection GLM (clustered SE by episode_id - robustness check):\n"
+                           + str(mc.summary2().tables[1]))
         except Exception as exc:  # noqa: BLE001
             out.append(f"detection GLM failed: {exc!r}")
     # Prevention as a function of defender settings.
@@ -454,6 +467,86 @@ def try_glm(df: pd.DataFrame) -> str:
         except Exception as exc:  # noqa: BLE001
             out.append(f"prevention GLM failed: {exc!r}")
     return "\n\n".join(out) if out else "GLM: not enough variation to fit a model"
+
+
+def held_out_operating_point(df: pd.DataFrame, holdout_frac: float = 0.5, seed: int = 0):
+    """Anti-overfitting guard for the detector-comparison "best operating
+    point" (research/baselines.py's Youden-J-max over 70 cells is an
+    exploratory grid search, not a held-out estimate - a reviewer will
+    reasonably ask whether it's overfit to this exact sample). Splits by
+    EPISODE (not row - a single episode's 70 config-grid rows must stay
+    together, or the split leaks), picks the best (window, threshold, scope)
+    cell by Youden-J on one half, then reports detection/FPR using THAT FIXED
+    cell on the other half, with a bootstrap CI on the held-out estimate."""
+    attack = _engaged_attacks(df)
+    benign = df[df["is_benign"]]
+    all_eps = pd.concat([attack, benign])["episode_id"].unique()
+    if len(all_eps) < 4:
+        return None
+    rng = np.random.default_rng(seed)
+    shuffled = rng.permutation(all_eps)
+    cut = max(1, int(len(shuffled) * (1 - holdout_frac)))
+    train_eps, test_eps = set(shuffled[:cut]), set(shuffled[cut:])
+
+    a_train = attack[attack["episode_id"].isin(train_eps)]
+    b_train = benign[benign["episode_id"].isin(train_eps)]
+    cells = df[["scope", "window_seconds", "threshold"]].drop_duplicates()
+    best = None
+    for _, cell in cells.iterrows():
+        akey = a_train[(a_train.scope == cell.scope) & (a_train.window_seconds == cell.window_seconds)
+                       & (a_train.threshold == cell.threshold)]
+        bkey = b_train[(b_train.scope == cell.scope) & (b_train.window_seconds == cell.window_seconds)
+                       & (b_train.threshold == cell.threshold)]
+        if akey.empty or bkey.empty:
+            continue
+        det = akey["detected"].astype(bool).mean()
+        fpr = bkey["false_positive"].astype(bool).mean()
+        j = det - fpr
+        if best is None or j > best["train_j"]:
+            best = {"window": cell.window_seconds, "threshold": cell.threshold, "scope": cell.scope,
+                    "train_j": j, "train_detect": det, "train_fpr": fpr}
+    if best is None:
+        return None
+
+    a_test = attack[(attack["episode_id"].isin(test_eps)) & (attack.scope == best["scope"])
+                     & (attack.window_seconds == best["window"]) & (attack.threshold == best["threshold"])]
+    b_test = benign[(benign["episode_id"].isin(test_eps)) & (benign.scope == best["scope"])
+                     & (benign.window_seconds == best["window"]) & (benign.threshold == best["threshold"])]
+    det, dlo, dhi = _bootstrap_ci(a_test["detected"].astype(float).values)
+    fpr, flo, fhi = _bootstrap_ci(b_test["false_positive"].astype(float).values)
+    best.update({
+        "n_train_episodes": len(train_eps), "n_test_episodes": len(test_eps),
+        "test_detect": det, "test_detect_ci": (dlo, dhi),
+        "test_fpr": fpr, "test_fpr_ci": (flo, fhi),
+    })
+    return best
+
+
+def effective_prevention_rate(df: pd.DataFrame, scope: str = "host",
+                               window=None, threshold=None):
+    """Unified system-level number: of ALL attack episodes (refused or
+    engaged), what fraction are stopped EITHER by the model's own safety
+    refusal OR by the defender's detection, at a fixed operating point? This
+    is the one-number synthesis of the paper's two axes (safety refusal +
+    host-EDR detection) instead of two adjacent statistics."""
+    attack = df[~df["is_benign"]].copy()
+    if attack.empty:
+        return None, None
+    w = window if window is not None else float(attack["window_seconds"].median())
+    t = threshold if threshold is not None else float(attack["threshold"].median())
+    cell = attack[(attack["window_seconds"] == w) & (attack["threshold"] == t)
+                  & (attack["scope"] == scope)].drop_duplicates("episode_id")
+    if cell.empty:
+        return None, None
+    refused = cell["refused"].astype(bool)
+    detected = cell["detected"].astype(bool) & ~refused
+    stopped = (refused | detected).astype(float).values
+    rate, lo, hi = _bootstrap_ci(stopped)
+    return {
+        "rate": rate, "ci_lo": lo, "ci_hi": hi, "n": len(cell),
+        "n_refused": int(refused.sum()), "n_caught": int(detected.sum()),
+        "n_missed": int((~refused & ~detected).sum()),
+    }, {"window": w, "threshold": t, "scope": scope}
 
 
 def main() -> None:
@@ -555,6 +648,23 @@ def main() -> None:
         print(f"wrote {cmp_fig}")
     else:
         print(f"\n(no baseline CSV at {baseline_csv} - skip research.baselines to compare against baselines)")
+
+    hoop = held_out_operating_point(df)
+    if hoop is not None:
+        print(f"\nHeld-out operating point (anti-overfitting check; "
+              f"n_train_episodes={hoop['n_train_episodes']}, n_test_episodes={hoop['n_test_episodes']}):")
+        print(f"   chosen on TRAIN half: window={hoop['window']:g}s threshold={hoop['threshold']:g} "
+              f"scope={hoop['scope']} (train detect={hoop['train_detect']:.2f}, train FPR={hoop['train_fpr']:.2f})")
+        dlo, dhi = hoop["test_detect_ci"]; flo, fhi = hoop["test_fpr_ci"]
+        print(f"   evaluated on TEST half (same fixed cell): detect={hoop['test_detect']:.2f} "
+              f"[{dlo:.2f},{dhi:.2f}]  FPR={hoop['test_fpr']:.2f} [{flo:.2f},{fhi:.2f}]")
+
+    epr, epr_meta = effective_prevention_rate(df)
+    if epr is not None:
+        print(f"\nEffective prevention rate (safety refusal OR detection; "
+              f"scope={epr_meta['scope']}, window={epr_meta['window']:g}s, threshold={epr_meta['threshold']:g}):")
+        print(f"   {epr['rate']:.2f} [{epr['ci_lo']:.2f},{epr['ci_hi']:.2f}]  (n={epr['n']}: "
+              f"{epr['n_refused']} refused, {epr['n_caught']} caught, {epr['n_missed']} missed)")
 
 
 if __name__ == "__main__":
