@@ -50,6 +50,32 @@ def _iso(value: Any) -> Optional[datetime]:
         return None
 
 
+def parse_falco_line(line: str):
+    """One raw Falco JSON line -> (ts, signal, category, weight, host, detail),
+    or None if the line is blank/malformed/untimestamped. Shared by the
+    offline file reader below and research.live_defender's live journalctl
+    tailer, so both score the identical rule->weight mapping."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    ts = _iso(rec.get("time"))
+    if ts is None:
+        return None
+    rule = rec.get("rule", "")
+    fields = rec.get("output_fields", {}) or {}
+    host = fields.get("container.name") or rec.get("hostname")
+    category, weight = _FALCO_RULES.get(
+        rule, ("execution", _FALCO_PRIORITY_WEIGHT.get(rec.get("priority", ""), 1.5))
+    )
+    return ts, f"falco:{rule}", category, weight, host, {
+        "proc": fields.get("proc.name"), "tags": rec.get("tags"),
+    }
+
+
 def _raw_falco(path: str):
     try:
         handle = open(path, "r", encoding="utf-8")
@@ -57,25 +83,9 @@ def _raw_falco(path: str):
         return
     with handle:
         for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ts = _iso(rec.get("time"))
-            if ts is None:
-                continue
-            rule = rec.get("rule", "")
-            fields = rec.get("output_fields", {}) or {}
-            host = fields.get("container.name") or rec.get("hostname")
-            category, weight = _FALCO_RULES.get(
-                rule, ("execution", _FALCO_PRIORITY_WEIGHT.get(rec.get("priority", ""), 1.5))
-            )
-            yield ts, f"falco:{rule}", category, weight, host, {
-                "proc": fields.get("proc.name"), "tags": rec.get("tags"),
-            }
+            parsed = parse_falco_line(line)
+            if parsed is not None:
+                yield parsed
 
 
 def _raw_suricata(path: str):
