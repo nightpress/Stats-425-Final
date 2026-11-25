@@ -304,6 +304,64 @@ def e2_guardrail_boundary(df: pd.DataFrame):
     return pd.DataFrame(rows).sort_values("median_stage_rank")
 
 
+def compare_detectors(ours_df: pd.DataFrame, baseline_csv: str):
+    """S&P-grade baseline comparison: our host-EDR detector vs naive_volume
+    (un-reweighted sensor sum - the pre-fix defender) and suricata_sig_all /
+    suricata_sig_exploit (off-the-shelf Suricata signature-alert counting),
+    all scored with the SAME evaluate_episode machinery on the SAME engaged
+    attacks. Returns (table, combined_summary) where table has one row per
+    detector: detection rate and FPR at that detector's best-separating
+    threshold (max detection-minus-FPR, i.e. the Youden-J operating point)."""
+    if not os.path.exists(baseline_csv):
+        return None, None
+    base = load(baseline_csv)
+    base["detector"] = base["detector"]
+    ours = ours_df.copy()
+    ours["detector"] = "host_edr (ours)"
+    frames = []
+    for name, sub in [("host_edr (ours)", ours)] + [
+        (d, base[base["detector"] == d]) for d in base["detector"].unique()
+    ]:
+        s = summarize(sub)
+        if s.empty:
+            continue
+        s["detector"] = name
+        frames.append(s)
+    if not frames:
+        return None, None
+    combined = pd.concat(frames, ignore_index=True)
+    rows = []
+    for name, g in combined.groupby("detector"):
+        g = g.dropna(subset=["detection_rate", "false_positive_rate"])
+        if g.empty:
+            continue
+        j = (g["detection_rate"] - g["false_positive_rate"])
+        best = g.loc[j.idxmax()]
+        rows.append({
+            "detector": name, "best_window": best["window_seconds"],
+            "best_threshold": best["threshold"], "best_scope": best["scope"],
+            "detection_rate": best["detection_rate"], "false_positive_rate": best["false_positive_rate"],
+            "youden_j": float(j.max()),
+        })
+    table = pd.DataFrame(rows).sort_values("youden_j", ascending=False)
+    return table, combined
+
+
+def plot_detector_comparison(combined: pd.DataFrame, out_path: str) -> None:
+    fig, ax = plt.subplots(figsize=(7.5, 6))
+    ax.plot([0, 1], [0, 1], linestyle=":", color="gray", alpha=0.5, label="chance")
+    for name, grp in combined.groupby("detector"):
+        grp = grp.sort_values("false_positive_rate")
+        ax.plot(grp["false_positive_rate"], grp["detection_rate"], marker="o",
+                 linestyle="-", alpha=0.85, label=name)
+    ax.set_xlabel("False-positive rate  (benign episodes flagged)")
+    ax.set_ylabel("Detection rate  (executed attacks detected)")
+    ax.set_title("Detector comparison: host-EDR (ours) vs baselines")
+    ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02)
+    ax.grid(True, alpha=0.3); ax.legend(fontsize=8)
+    fig.tight_layout(); fig.savefig(out_path, dpi=130); plt.close(fig)
+
+
 def try_glm(df: pd.DataFrame) -> str:
     try:
         import statsmodels.formula.api as smf
@@ -338,6 +396,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("rows_csv")
     p.add_argument("--outdir", default="research/out")
+    p.add_argument("--baseline-csv", default=None,
+                    help="research.baselines output (naive_volume/suricata_sig_*) for a head-to-head comparison")
     args = p.parse_args()
     figdir = os.path.join(args.outdir, "figures")
     os.makedirs(figdir, exist_ok=True)
@@ -402,6 +462,18 @@ def main() -> None:
                       f"reach-exfil={r['frac_reach_exfil']:.2f} (n={int(r['n'])})")
 
     print("\n" + try_glm(df))
+
+    baseline_csv = args.baseline_csv or os.path.join(os.path.dirname(args.rows_csv), "baseline_rows.csv")
+    table, combined = compare_detectors(df, baseline_csv)
+    if table is not None:
+        table.to_csv(os.path.join(args.outdir, "detector_comparison.csv"), index=False)
+        cmp_fig = os.path.join(figdir, "detector_comparison.png")
+        plot_detector_comparison(combined, cmp_fig)
+        print(f"\nDetector comparison (best operating point per detector, Youden-J):")
+        print(table.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
+        print(f"wrote {cmp_fig}")
+    else:
+        print(f"\n(no baseline CSV at {baseline_csv} - skip research.baselines to compare against baselines)")
 
 
 if __name__ == "__main__":
