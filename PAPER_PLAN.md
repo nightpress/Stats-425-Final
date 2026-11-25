@@ -31,9 +31,19 @@ Defender consumes Falco + Suricata, not the attacker's self-report.
   volume scoring is dominated by benign traffic (benign out-generates every
   attack class) → FPR=1.0 pre-fix; the host-EDR behaviors that actually
   separate the classes (untrusted-shell exec, stdout→network, drop-and-
-  execute) bring FPR to 0.014 (0 for threshold≥10). Quantified against
-  baselines in `research/baselines.py` (ours ~3x the detection rate of the
-  best baseline at matched zero FPR).
+  execute) bring FPR to 0 for the `steady`/`light` benign tempo profiles.
+  Quantified against baselines in `research/baselines.py`.
+- **Benign-realism finding (do not overclaim FPR=0):** an AGGRESSIVE,
+  scanner-heavy admin workload (the `heavy` profile — Nikto/Nmap-style deep
+  service probing, `incalmo/.../benign_admin.py`) drives FPR to ~0.6 at the
+  reported operating point, because its subprocess/socket-piping scan
+  pattern trips the SAME two signals that discriminate real attacks
+  (`Drop and execute new binary`, `Redirect STDOUT/STDIN to Network`) - a
+  genuine behavioral overlap between deep vulnerability scanning and
+  exploitation, not a bug. Report FPR as tempo-conditional: ~0 for
+  steady/light administrative activity, ~0.6 for an aggressive internal
+  scanner workload at this same threshold (`research/analyze.py
+  benign_fpr_by_profile`, `research/out/caplib/benign_fpr_by_profile.csv`).
 
 ### 2. Attacker spectrum (autonomy axis)  — ✅ DONE (within Claude)
 Scripted (`EquifaxStrategy`, deterministic, $0, always completes the chain)
@@ -106,16 +116,33 @@ a hard external-validity limitation, not downplayed - see below.
 
 ## Status
 - ✅ Offline (replay) defender, harness, cost accounting, real benign driver.
-- ✅ Two independent sensors (Falco + Suricata) captured over a 95-episode
-  library spanning scripted/LLM(haiku/sonnet/opus, 5.5 + 4.5-4.8 generations)/
-  benign attackers; host-EDR reweighting fixes a volume-domination FPR=1.0
-  failure mode (FPR→0.014, 0 for threshold≥10) - see git history.
+- ✅ Two independent sensors (Falco + Suricata) captured over a 107-episode
+  library spanning scripted/LLM(haiku/sonnet/opus, 5.5 + 4.5-4.8 generations,
+  2 MHBench-lite environments)/benign(3 tempo profiles) attackers; host-EDR
+  reweighting fixes a volume-domination FPR=1.0 failure mode - see git history
+  and the benign-realism finding below for the honest, tempo-conditional FPR.
 - ✅ E1/E1b/E2: autonomy-graded detectability; refusal is a 5.5-generation
-  safety-training shift (not capability) AND robust to goal reframing.
-- ✅ Baseline comparison (`research/baselines.py`): naive-volume and two
-  Suricata-signature baselines, all ~3x worse than our detector at matched FPR.
-- ✅ Benign-realism ablation: FPR across three tempo/intensity profiles
-  (light/steady/heavy), not just one fixed benign behavior.
+  safety-training shift (not capability) AND robust to goal reframing AND
+  (MHBench-lite, n=2) corroborated across two independent environments -
+  the boundary lands at data-exfiltration intent specifically, not at
+  reconnaissance/lateral-movement (`docker/mhbench/README.md`).
+- ✅ Baseline comparison (`research/baselines.py`) at the overall best
+  operating point (window=30s, threshold=10, scope=global, now including the
+  `heavy` benign profile): host-EDR (ours) detect=0.867 FPR=0.150 (J=0.717)
+  vs. suricata_sig_all detect=0.299 FPR=0.250 (J=0.049) vs. naive_volume /
+  suricata_sig_exploit, whose grids find no cell worth reporting once `heavy`
+  is included (J=0 - the honest "neither detects nor false-alarms" corner).
+  Report both the single best-point number AND the full curve
+  (`research/out/caplib/figures/detector_comparison.png`) - the single point
+  alone understates how much better ours separates attack from benign.
+- ✅ Benign-realism ablation (FPR across three tempo/intensity profiles) - a
+  REAL finding, not a clean pass: `steady`/`light` admin activity holds
+  FPR=0, but the `heavy` (aggressive internal vuln-scanner) profile drives
+  FPR to ~0.6 at the same operating point - its Nikto/Nmap-style deep service
+  probing trips the SAME two signals that discriminate real attacks
+  (subprocess spawn + socket-piped I/O look identical whether the process is
+  a scanner or a shell). Report FPR as tempo-conditional, not a single
+  number (`research/analyze.py benign_fpr_by_profile`).
 - ✅ E4a tempo-robustness ablation (`scripts/tempo_sweep.sh`): detection vs.
   attack pacing, varying ONLY the existing step-delay knob
   (`incalmo/incalmo_runner.py` `STEP_DELAY_S`) - no new attacker technique.
@@ -129,10 +156,17 @@ a hard external-validity limitation, not downplayed - see below.
 
 ## Honest limitations to state in any submission
 Emulated range (not a production network); `actions.json`-as-labels assumes
-the attacker's self-report is correct ground truth; **single vulnerability
-class / single topology** (see Environments above - the main external-validity
-gap); the closed-loop ablation is Falco-only and global-scope, not a live
-replica of the full two-sensor per-host replay result; no sensor-aware
-adaptive adversary (the attacker in every experiment is sensor-oblivious -
-see THREAT_MODEL.md "Explicit non-goals"); Claude-only model coverage (no
-cross-vendor arm - within-Claude generation/capability gradient only).
+the attacker's self-report is correct ground truth; **mostly one vulnerability
+class / topology** - the main study is Struts/`equifax_large` only, and the
+two MHBench-lite environments (`docker/mhbench/`) are n=1 episode each so
+far (a feasibility/corroboration result, not yet a powered one - see
+Environments above); the closed-loop ablation is Falco-only and global-scope,
+not a live replica of the full two-sensor per-host replay result; no
+sensor-aware adaptive adversary (the attacker in every experiment is
+sensor-oblivious - see THREAT_MODEL.md "Explicit non-goals"); Claude-only
+model coverage (no cross-vendor arm - within-Claude generation/capability
+gradient only); **the host-EDR detector's FPR=0 is tempo-conditional, not
+universal** - it holds for steady/light administrative benign activity but
+rises to ~0.6 against an aggressive internal-scanner-style benign workload,
+because deep service probing and real exploitation trip the same low-level
+subprocess/socket-I/O signals (see the benign-realism finding above).

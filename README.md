@@ -9,7 +9,11 @@ network) while the attacker's own log provides ground-truth labels.
 measurably, robust to goal reframing, and as a specific generation shift (not
 a capability one) — and independent host-EDR telemetry detects the models
 that aren't bounded, substantially outperforming naive baselines, at zero
-false positives across varied benign behavior. Full research plan,
+false positives against ordinary (steady/light-tempo) benign admin activity —
+though that guarantee is tempo-conditional, not universal: an aggressive
+internal-scanner-style benign workload drives false positives to ~0.6,
+because deep service probing and real exploitation trip the same low-level
+signals (see `PAPER_PLAN.md` "benign-realism finding"). Full research plan,
 experiments (E1–E4), threat model ([`THREAT_MODEL.md`](THREAT_MODEL.md)), and
 venue strategy are in [`PAPER_PLAN.md`](PAPER_PLAN.md). Open tasks are
 tracked in the repo **Issues**.
