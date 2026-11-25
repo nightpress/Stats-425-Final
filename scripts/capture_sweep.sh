@@ -21,6 +21,9 @@ export LLM_MODEL
 # (benign-<key>__...) so varied-profile runs don't collide with the original
 # plain "benign__..." episodes (default profile=steady matches that baseline).
 BENIGN_PROFILE=${BENIGN_PROFILE:-steady}; BENIGN_KEY=${BENIGN_KEY:-}
+# Attack-tempo robustness (E4): delay between successive strategy steps (see
+# incalmo/incalmo_runner.py STEP_DELAY_S). TEMPO_KEY suffixes the episode id.
+STEP_DELAY_S=${STEP_DELAY_S:-0.5}; TEMPO_KEY=${TEMPO_KEY:-}
 mkdir -p "$LIB"  # the .caplog redirect below writes here; a failed redirect aborts the whole capture
 
 # Ensure the DB-pivot implant payload is staged (gitignored; a setup step).
@@ -56,6 +59,7 @@ run_one() {  # $1=label $2=type $3=rep
   bash scripts/capture_episode.sh "$EP" timeout "$PER_EP_TIMEOUT" \
     $COMPOSE exec -T -e C2C_SERVER_AGENTS="$C2" -e "INCALMO_OUTPUT_DIR=/incalmo/$EP" \
     -e ATTACK_FRAMING="${ATTACK_FRAMING:-baseline}" -e INCALMO_BENIGN_PROFILE="$BENIGN_PROFILE" \
+    -e INCALMO_STEP_DELAY_S="$STEP_DELAY_S" \
     attacker bash -lc "cd /incalmo && uv run python main.py" \
     > "$EP.caplog" 2>&1 || echo "[warn] $eid capture returned non-zero"
   echo "       exfil=$(grep -o ExfiltratedData "$EP/actions.json" 2>/dev/null | wc -l) \
@@ -67,8 +71,9 @@ cp config/config.json config/config.json.sweepbak 2>/dev/null || true
 trap 'mv config/config.json.sweepbak config/config.json 2>/dev/null || true' EXIT
 
 BENIGN_LABEL="benign"; [ -n "$BENIGN_KEY" ] && BENIGN_LABEL="benign-$BENIGN_KEY"
-echo "=== capture sweep: scripted=$SCRIPTED llm=$LLM ($LLM_MODEL -> llm-$LLM_KEY) benign=$BENIGN (profile=$BENIGN_PROFILE -> $BENIGN_LABEL) ==="
-if [ "$SCRIPTED" -gt 0 ]; then for i in $(seq 0 $((SCRIPTED - 1))); do run_one scripted-equifax scripted "$i"; done; fi
+SCRIPTED_LABEL="scripted-equifax"; [ -n "$TEMPO_KEY" ] && SCRIPTED_LABEL="scripted-equifax-$TEMPO_KEY"
+echo "=== capture sweep: scripted=$SCRIPTED ($SCRIPTED_LABEL, step_delay=${STEP_DELAY_S}s) llm=$LLM ($LLM_MODEL -> llm-$LLM_KEY) benign=$BENIGN (profile=$BENIGN_PROFILE -> $BENIGN_LABEL) ==="
+if [ "$SCRIPTED" -gt 0 ]; then for i in $(seq 0 $((SCRIPTED - 1))); do run_one "$SCRIPTED_LABEL" scripted "$i"; done; fi
 if [ "$LLM"      -gt 0 ]; then for i in $(seq 0 $((LLM - 1)));      do run_one "llm-$LLM_KEY"  llm      "$i"; done; fi
 if [ "$BENIGN"   -gt 0 ]; then for i in $(seq 0 $((BENIGN - 1)));   do run_one "$BENIGN_LABEL" benign   "$i"; done; fi
 

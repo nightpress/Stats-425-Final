@@ -311,6 +311,39 @@ def e1_detectability_by_autonomy(df: pd.DataFrame, scope: str = "host",
     return summary, {"window": w, "threshold": t, "scope": scope, "chi2_p": p}
 
 
+def _tempo_key(attacker_model: str) -> str:
+    """("scripted-equifax") -> "fast" (the 0.5s default); ("scripted-equifax-
+    slow") -> "slow". Mirrors _split_model_framing/_benign_profile's episode-id
+    suffix parsing for the attack-TEMPO robustness ablation (E4)."""
+    if not isinstance(attacker_model, str) or not attacker_model.startswith("scripted-equifax"):
+        return "-"
+    rest = attacker_model[len("scripted-equifax"):]
+    return rest[1:] if rest.startswith("-") else "fast"
+
+
+def detection_by_tempo(df: pd.DataFrame, scope: str = "global",
+                        window: Optional[float] = None, threshold: Optional[float] = None):
+    """E4 (adaptive-adversary ablation, scoped to an existing parameter): does
+    detection hold as the SAME deterministic attack is spread across more
+    wall-clock time (incalmo_runner.py STEP_DELAY_S), relative to a fixed
+    detector window? One row per tempo key, at a fixed operating point."""
+    attack = _engaged_attacks(df).copy()
+    if attack.empty or "attacker_model" not in attack:
+        return None, None
+    attack["tempo"] = attack["attacker_model"].map(_tempo_key)
+    attack = attack[attack["tempo"] != "-"]
+    if attack.empty:
+        return None, None
+    w = window if window is not None else float(attack["window_seconds"].median())
+    t = threshold if threshold is not None else float(attack["threshold"].median())
+    cell = attack[(attack["window_seconds"] == w) & (attack["threshold"] == t) & (attack["scope"] == scope)]
+    rows = []
+    for tempo, g in cell.groupby("tempo"):
+        det, lo, hi = _bootstrap_ci(g["detected"].astype(float).values)
+        rows.append({"tempo": tempo, "n": len(g), "detection_rate": det, "ci_lo": lo, "ci_hi": hi})
+    return pd.DataFrame(rows).sort_values("tempo"), {"window": w, "threshold": t, "scope": scope}
+
+
 def e2_guardrail_boundary(df: pd.DataFrame):
     """E2: furthest kill-chain stage each attacker reaches — where LLM attackers
     halt (safety guardrail) vs scripted attackers that complete the chain.
@@ -489,6 +522,15 @@ def main() -> None:
                       f"[{r['ci_lo']:.2f},{r['ci_hi']:.2f}] (n={int(r['n'])})")
             if meta["chi2_p"] is not None:
                 print(f"   chi-square (detection depends on autonomy): p={meta['chi2_p']:.4g}")
+
+    tempo, tempo_meta = detection_by_tempo(df)
+    if tempo is not None and not tempo.empty and tempo["tempo"].nunique() > 1:
+        tempo.to_csv(os.path.join(args.outdir, "detection_by_tempo.csv"), index=False)
+        print(f"\nE4 attack-tempo robustness - detection rate by step delay "
+              f"(scope={tempo_meta['scope']}, window={tempo_meta['window']:g}s, threshold={tempo_meta['threshold']:g}):")
+        for _, r in tempo.iterrows():
+            print(f"   {r['tempo']:>8}: detect={r['detection_rate']:.2f} "
+                  f"[{r['ci_lo']:.2f},{r['ci_hi']:.2f}] (n={int(r['n'])})")
 
     if "furthest_stage_rank" in df:
         e2 = e2_guardrail_boundary(df)
